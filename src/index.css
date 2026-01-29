@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink-rgb: 31 41 51;
+  --muted-rgb: 101 110 125;
+  --canvas-rgb: 242 244 247;
+  --panel-rgb: 255 255 255;
+  --brand-rgb: 245 158 11;
+  --accent-rgb: 37 99 235;
+  --warning-rgb: 245 158 11;
+  --success-rgb: 22 163 74;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  color: rgb(var(--ink-rgb));
+  background: linear-gradient(160deg, #fff7e6 0%, #f4f6fb 45%, #e8eefc 100%);
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(6px);
+}
+
+.card-shadow {
+  box-shadow: 0 24px 60px -40px rgba(15, 23, 42, 0.35);
+}
+
+.tag {
+  @apply inline-flex items-center gap-1 rounded-full border border-brand/30 bg-brand/10 px-2 py-0.5 text-xs font-medium text-ink;
+}
+
+.metric-chip {
+  @apply rounded-2xl border border-ink/10 bg-white/80 px-3 py-2 shadow-sm;
+}
+
+.text-balance {
+  text-wrap: balance;
+}

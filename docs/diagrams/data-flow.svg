@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">
+  <defs>
+    <style>
+      .box { fill: #ffffff; stroke: #1f2937; stroke-width: 1.5; rx: 12; }
+      .title { font: 600 18px 'Arial', sans-serif; fill: #0f172a; }
+      .label { font: 500 14px 'Arial', sans-serif; fill: #1f2937; }
+      .sub { font: 400 12px 'Arial', sans-serif; fill: #475569; }
+      .line { stroke: #64748b; stroke-width: 1.4; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#64748b" />
+    </marker>
+  </defs>
+
+  <rect x="20" y="20" width="1160" height="380" rx="18" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="40" y="50" class="title">Data Flow</text>
+
+  <rect class="box" x="60" y="120" width="160" height="50"/>
+  <text x="78" y="150" class="label">Excel Upload</text>
+
+  <rect class="box" x="260" y="120" width="160" height="50"/>
+  <text x="282" y="150" class="label">SheetJS Parse</text>
+
+  <rect class="box" x="460" y="120" width="160" height="50"/>
+  <text x="488" y="150" class="label">coerceRow</text>
+
+  <rect class="box" x="660" y="120" width="160" height="50"/>
+  <text x="684" y="150" class="label">buildReport</text>
+
+  <rect class="box" x="860" y="120" width="160" height="50"/>
+  <text x="885" y="150" class="label">App State</text>
+
+  <rect class="box" x="1060" y="120" width="100" height="50"/>
+  <text x="1076" y="150" class="label">UI</text>
+
+  <line class="line" x1="220" y1="145" x2="260" y2="145"/>
+  <line class="line" x1="420" y1="145" x2="460" y2="145"/>
+  <line class="line" x1="620" y1="145" x2="660" y2="145"/>
+  <line class="line" x1="820" y1="145" x2="860" y2="145"/>
+  <line class="line" x1="1020" y1="145" x2="1060" y2="145"/>
+
+  <text x="95" y="210" class="sub">.xlsx file</text>
+  <text x="265" y="210" class="sub">rows[]</text>
+  <text x="460" y="210" class="sub">normalize + clamp</text>
+  <text x="650" y="210" class="sub">metrics + scores</text>
+  <text x="852" y="210" class="sub">filters + selection</text>
+</svg>

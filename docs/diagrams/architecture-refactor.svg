@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520">
+  <defs>
+    <style>
+      .box { fill: #ffffff; stroke: #1f2937; stroke-width: 1.5; rx: 12; }
+      .title { font: 600 18px 'Arial', sans-serif; fill: #0f172a; }
+      .label { font: 500 14px 'Arial', sans-serif; fill: #1f2937; }
+      .sub { font: 400 12px 'Arial', sans-serif; fill: #475569; }
+      .line { stroke: #64748b; stroke-width: 1.4; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#64748b" />
+    </marker>
+  </defs>
+
+  <rect x="20" y="20" width="1160" height="480" rx="18" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="40" y="50" class="title">Spaghetti vs Refactor</text>
+
+  <!-- Left: spaghetti -->
+  <text x="120" y="100" class="label">Before (Spaghetti)</text>
+  <rect class="box" x="80" y="130" width="280" height="80"/>
+  <text x="105" y="165" class="label">App.tsx</text>
+  <text x="105" y="185" class="sub">parsing + metrics + UI + export</text>
+
+  <rect class="box" x="80" y="240" width="280" height="70"/>
+  <text x="105" y="270" class="sub">Inline logic everywhere</text>
+  <text x="105" y="290" class="sub">Harder to test/explain</text>
+
+  <line class="line" x1="220" y1="210" x2="220" y2="240"/>
+
+  <!-- Right: refactor -->
+  <text x="720" y="100" class="label">Now (Refactor)</text>
+
+  <rect class="box" x="640" y="130" width="260" height="70"/>
+  <text x="665" y="165" class="label">App.tsx</text>
+  <text x="665" y="185" class="sub">state, upload, export</text>
+
+  <rect class="box" x="940" y="130" width="200" height="70"/>
+  <text x="965" y="165" class="label">ReportCard.tsx</text>
+  <text x="965" y="185" class="sub">presentation + charts</text>
+
+  <rect class="box" x="640" y="240" width="500" height="70"/>
+  <text x="665" y="275" class="label">utils/metrics.ts</text>
+  <text x="665" y="295" class="sub">pure functions: buildReport, percentiles, scores</text>
+
+  <line class="line" x1="770" y1="200" x2="770" y2="240"/>
+  <line class="line" x1="940" y1="165" x2="860" y2="165"/>
+
+  <text x="650" y="355" class="sub">Separation of concerns, easier to explain/test</text>
+</svg>
