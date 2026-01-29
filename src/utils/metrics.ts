@@ -77,10 +77,10 @@ export const DEFAULT_METRICS: MetricDefinition[] = [
   },
   {
     key: 'assemblyMissingInst',
-    label: 'Assembly Missing Instruments',
+    label: 'Missing Instruments Rate',
     higherBetter: false,
-    format: 'number',
-    decimals: 0,
+    format: 'rate',
+    decimals: 2,
     helper: 'lower is better',
   },
   {
@@ -488,6 +488,7 @@ export const buildReport = (
     const assemblyMissingInst = toNumber(row['Assembly Missing Inst'])
     const unitsOfService = sinkInst * 0.5 + assembledInst
     const workedHoursPerUnit = safeDiv(hoursWorked, unitsOfService, 1)
+    const missingInstRate = safeDiv(assemblyMissingInst, assembledInst, 1)
 
     const id = String(row['User ID'] ?? '')
     const name = String(row['User Name'] ?? '').trim() || `Tech ${index + 1}`
@@ -517,7 +518,7 @@ export const buildReport = (
         assembledPacks,
         assembledInst,
         workedHoursPerUnit,
-        assemblyMissingInst,
+        assemblyMissingInst: missingInstRate,
         sterilizerLoads,
         itemsSterilized,
         deliverScans,

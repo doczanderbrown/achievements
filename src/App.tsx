@@ -439,8 +439,8 @@ const App = () => {
                       provided.
                     </li>
                     <li>
-                      Quality blends defect rate with missing instruments, and Versatility reflects
-                      above-median pillars.
+                      Quality blends defect rate with missing instruments rate (missing per
+                      assembled instruments), and Versatility reflects above-median pillars.
                     </li>
                     <li>Archetypes pick the dominant pillar; utility status rewards multi-pillar strength.</li>
                   </ul>
