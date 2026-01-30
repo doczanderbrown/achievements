@@ -781,6 +781,7 @@ const App = () => {
                     pillarMedians={report.pillarMedians}
                     anonymize={anonymize}
                     hoursWorkedAvailable={hoursWorkedAvailable}
+                    shortPillarLabels
                     interactive
                     onClick={() => setSelectedUser(user)}
                   />

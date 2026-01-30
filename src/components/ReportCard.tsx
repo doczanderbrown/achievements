@@ -21,6 +21,7 @@ type ReportCardProps = {
   anonymize: boolean
   hoursWorkedAvailable: boolean
   showArchetypeDescription?: boolean
+  shortPillarLabels?: boolean
   onClick?: () => void
   interactive?: boolean
   className?: string
@@ -78,11 +79,13 @@ const ReportCard = ({
   anonymize,
   hoursWorkedAvailable,
   showArchetypeDescription = false,
+  shortPillarLabels = false,
   onClick,
   interactive = false,
   className = '',
 }: ReportCardProps) => {
   const displayName = anonymize ? user.techLabel : user.name
+  const deconLabel = shortPillarLabels ? 'Decon' : 'Decontamination'
 
   const comparisonItems = DEFAULT_METRICS.map((metric) => {
     const value = user.metrics[metric.key]
@@ -96,7 +99,7 @@ const ReportCard = ({
 
   const barData = [
     {
-      name: 'Decontamination',
+      name: deconLabel,
       User: user.pillarTotals.decon,
       Median: pillarMedians.decon,
     },
@@ -113,7 +116,7 @@ const ReportCard = ({
   ]
 
   const radarData = [
-    { pillar: 'Decontamination', value: user.pillarPercentiles.decon },
+    { pillar: deconLabel, value: user.pillarPercentiles.decon },
     { pillar: 'Assembly', value: user.pillarPercentiles.assembly },
     { pillar: 'Sterilize', value: user.pillarPercentiles.sterilize },
     { pillar: 'Quality', value: user.scores.qualityPercentile },
