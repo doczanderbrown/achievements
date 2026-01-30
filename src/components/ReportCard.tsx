@@ -27,16 +27,21 @@ type ReportCardProps = {
   className?: string
 }
 
+const getPercentileColor = (percentile: number) => {
+  if (percentile >= 75) return 'text-green-600'
+  if (percentile >= 25) return 'text-blue-600'
+  return 'text-red-600'
+}
+
 const ScoreBlock = ({
   label,
   percentile,
-  accentClass,
 }: {
   label: string
   percentile: number
-  accentClass: string
 }) => {
   const rounded = Math.round(percentile)
+  const colorClass = getPercentileColor(rounded)
   const suffix = (() => {
     const mod100 = rounded % 100
     if (mod100 >= 11 && mod100 <= 13) return 'th'
@@ -55,7 +60,7 @@ const ScoreBlock = ({
     <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 shadow-sm">
       <div className="text-xs uppercase tracking-[0.18em] text-muted">{label}</div>
       <div className="mt-2 flex items-end justify-between">
-        <div className={`text-3xl font-semibold ${accentClass}`}>
+        <div className={`text-3xl font-semibold ${colorClass}`}>
           {rounded}
           <span className="ml-1 text-sm font-medium text-muted">
             {suffix} Percentile
@@ -69,13 +74,12 @@ const ScoreBlock = ({
 const MetricScoreBlock = ({
   label,
   percentile,
-  accentClass,
 }: {
   label: string
   percentile: number
-  accentClass: string
 }) => {
   const rounded = Math.round(percentile)
+  const colorClass = getPercentileColor(rounded)
   const suffix = (() => {
     const mod100 = rounded % 100
     if (mod100 >= 11 && mod100 <= 13) return 'th'
@@ -94,7 +98,7 @@ const MetricScoreBlock = ({
     <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 shadow-sm">
       <div className="text-xs uppercase tracking-[0.18em] text-muted">{label}</div>
       <div className="mt-2 flex items-end">
-        <div className={`text-3xl font-semibold ${accentClass}`}>
+        <div className={`text-3xl font-semibold ${colorClass}`}>
           {rounded}
           <span className="ml-1 text-sm font-medium text-muted">
             {suffix} Percentile
@@ -225,17 +229,14 @@ const ReportCard = ({
         <ScoreBlock
           label="Productivity"
           percentile={user.scores.productivityPercentile}
-          accentClass="text-brand"
         />
         <MetricScoreBlock
           label="Quality (Defect)"
           percentile={user.percentiles.defectRate}
-          accentClass="text-accent"
         />
         <MetricScoreBlock
           label="Missing Instruments"
           percentile={user.percentiles.assemblyMissingInst}
-          accentClass="text-ink"
         />
       </div>
 
