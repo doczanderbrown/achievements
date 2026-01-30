@@ -29,12 +29,10 @@ type ReportCardProps = {
 
 const ScoreBlock = ({
   label,
-  score,
   percentile,
   accentClass,
 }: {
   label: string
-  score: number
   percentile: number
   accentClass: string
 }) => {
@@ -57,10 +55,50 @@ const ScoreBlock = ({
     <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 shadow-sm">
       <div className="text-xs uppercase tracking-[0.18em] text-muted">{label}</div>
       <div className="mt-2 flex items-end justify-between">
-        <div className={`text-3xl font-semibold ${accentClass}`}>{score.toFixed(0)}</div>
-        <div className="text-xs font-medium text-muted">
+        <div className={`text-3xl font-semibold ${accentClass}`}>
           {rounded}
-          {suffix} Percentile
+          <span className="ml-1 text-sm font-medium text-muted">
+            {suffix} Percentile
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const MetricScoreBlock = ({
+  label,
+  percentile,
+  accentClass,
+}: {
+  label: string
+  percentile: number
+  accentClass: string
+}) => {
+  const rounded = Math.round(percentile)
+  const suffix = (() => {
+    const mod100 = rounded % 100
+    if (mod100 >= 11 && mod100 <= 13) return 'th'
+    switch (rounded % 10) {
+      case 1:
+        return 'st'
+      case 2:
+        return 'nd'
+      case 3:
+        return 'rd'
+      default:
+        return 'th'
+    }
+  })()
+  return (
+    <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 shadow-sm">
+      <div className="text-xs uppercase tracking-[0.18em] text-muted">{label}</div>
+      <div className="mt-2 flex items-end">
+        <div className={`text-3xl font-semibold ${accentClass}`}>
+          {rounded}
+          <span className="ml-1 text-sm font-medium text-muted">
+            {suffix} Percentile
+          </span>
         </div>
       </div>
     </div>
@@ -94,6 +132,7 @@ const ReportCard = ({
       metric,
       value,
       median,
+      delta: value - median,
     }
   })
 
@@ -185,20 +224,17 @@ const ReportCard = ({
       <div className="grid gap-3 md:grid-cols-3">
         <ScoreBlock
           label="Productivity"
-          score={user.scores.productivity}
           percentile={user.scores.productivityPercentile}
           accentClass="text-brand"
         />
-        <ScoreBlock
-          label="Quality"
-          score={user.scores.quality}
-          percentile={user.scores.qualityPercentile}
+        <MetricScoreBlock
+          label="Quality (Defect)"
+          percentile={user.percentiles.defectRate}
           accentClass="text-accent"
         />
-        <ScoreBlock
-          label="Versatility"
-          score={user.scores.versatility}
-          percentile={user.scores.versatilityPercentile}
+        <MetricScoreBlock
+          label="Missing Instruments"
+          percentile={user.percentiles.assemblyMissingInst}
           accentClass="text-ink"
         />
       </div>
@@ -219,7 +255,17 @@ const ReportCard = ({
                 ) : null}
               </div>
               <div className="mt-2 flex items-end justify-between">
-                <div className="text-lg font-semibold text-ink">
+                <div
+                  className={`text-lg font-semibold ${
+                    item.metric.format === 'rate'
+                      ? item.delta < 0
+                        ? 'text-green-600'
+                        : item.delta > 0
+                          ? 'text-red-600'
+                          : 'text-ink'
+                      : 'text-ink'
+                  }`}
+                >
                   {formatMetricValue(item.value, item.metric)}
                 </div>
                 <div className="text-right text-[10px] text-muted">
