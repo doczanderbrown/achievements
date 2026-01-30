@@ -77,7 +77,7 @@ export const DEFAULT_METRICS: MetricDefinition[] = [
   },
   {
     key: 'assemblyMissingInst',
-    label: 'Missing Instruments Rate',
+    label: 'Missing Instr Rate',
     higherBetter: false,
     format: 'rate',
     decimals: 2,
