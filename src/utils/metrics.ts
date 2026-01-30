@@ -169,6 +169,12 @@ export type UserRecord = {
   name: string
   techLabel: string
   hoursWorked: number
+  productivityDrivers: {
+    decon: number
+    assembly: number
+    sterilize: number
+    basis: 'rates' | 'totals'
+  }
   metrics: Record<MetricKey, number>
   percentiles: Record<MetricKey, number>
   pillarTotals: PillarTotals
@@ -551,6 +557,16 @@ export const buildReport = (
       PILLAR_HIGHER_BETTER,
     )
 
+    const driverBasis = hoursWorkedAvailable ? 'rates' : 'totals'
+    const driverValues = hoursWorkedAvailable ? pillarRatePercentiles : pillarPercentiles
+    const driverSum = driverValues.decon + driverValues.assembly + driverValues.sterilize
+    const productivityDrivers = {
+      decon: driverSum ? (driverValues.decon / driverSum) * 100 : 0,
+      assembly: driverSum ? (driverValues.assembly / driverSum) * 100 : 0,
+      sterilize: driverSum ? (driverValues.sterilize / driverSum) * 100 : 0,
+      basis: driverBasis as 'rates' | 'totals',
+    }
+
     const pillarsAboveMedian: Record<PillarKey, boolean> = {
       decon: user.pillarTotals.decon >= pillarMedians.decon,
       assembly: user.pillarTotals.assembly >= pillarMedians.assembly,
@@ -578,6 +594,7 @@ export const buildReport = (
       percentiles,
       pillarPercentiles,
       pillarsAboveMedian,
+      productivityDrivers,
       scores: {
         productivity,
         quality,

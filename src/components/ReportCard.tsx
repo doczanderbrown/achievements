@@ -122,6 +122,26 @@ const ReportCard = ({
     { pillar: 'Quality', value: user.scores.qualityPercentile },
   ]
 
+  const totalPillarActivity =
+    user.pillarTotals.decon + user.pillarTotals.assembly + user.pillarTotals.sterilize
+  const deconShare = totalPillarActivity ? (user.pillarTotals.decon / totalPillarActivity) * 100 : 0
+  const assemblyShare = totalPillarActivity
+    ? (user.pillarTotals.assembly / totalPillarActivity) * 100
+    : 0
+  const sterilizeShare = totalPillarActivity
+    ? (user.pillarTotals.sterilize / totalPillarActivity) * 100
+    : 0
+
+  const itemsPerLoad = user.metrics.sterilizerLoads
+    ? user.metrics.itemsSterilized / Math.max(user.metrics.sterilizerLoads, 1)
+    : 0
+
+  const productivityDrivers = [
+    { key: 'assembly', label: 'Assembly', value: user.productivityDrivers.assembly },
+    { key: 'sterilize', label: 'Sterilize', value: user.productivityDrivers.sterilize },
+    { key: 'decon', label: 'Decontamination', value: user.productivityDrivers.decon },
+  ].sort((a, b) => b.value - a.value)
+
   const interactiveClasses = interactive
     ? 'cursor-pointer transition hover:-translate-y-0.5 hover:shadow-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60'
     : ''
@@ -226,6 +246,76 @@ const ReportCard = ({
         )}
       </section>
 
+      {showArchetypeDescription ? (
+        <section className="rounded-2xl border border-ink/10 bg-white/85 p-3 text-sm text-muted">
+          <details>
+            <summary className="cursor-pointer font-semibold text-ink">
+              Why your productivity score looks this way
+            </summary>
+            <div className="mt-2 space-y-2">
+              <div>
+                Your productivity is driven mostly by{' '}
+                <span className="font-semibold text-ink">
+                  {productivityDrivers[0].value.toFixed(0)}% {productivityDrivers[0].label}
+                </span>{' '}
+                and{' '}
+                <span className="font-semibold text-ink">
+                  {productivityDrivers[1].value.toFixed(0)}% {productivityDrivers[1].label}
+                </span>
+                , with{' '}
+                <span className="font-semibold text-ink">
+                  {productivityDrivers[2].value.toFixed(0)}% {productivityDrivers[2].label}
+                </span>{' '}
+                contributing as well.
+              </div>
+              <div className="text-xs text-muted">
+                Based on {user.productivityDrivers.basis === 'rates' ? 'per-hour pillar rates' : 'pillar totals'}.
+              </div>
+            </div>
+          </details>
+        </section>
+      ) : null}
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="text-sm font-semibold text-ink">Work mix</h4>
+          <div className="text-[10px] uppercase tracking-[0.14em] text-muted">
+            % of total pillar activity
+          </div>
+        </div>
+        <div className="flex h-3 overflow-hidden rounded-full border border-ink/10 bg-white/80">
+          <div
+            className="h-full bg-accent"
+            style={{ width: `${deconShare}%` }}
+            title={`Decon ${deconShare.toFixed(1)}%`}
+          />
+          <div
+            className="h-full bg-brand"
+            style={{ width: `${assemblyShare}%` }}
+            title={`Assembly ${assemblyShare.toFixed(1)}%`}
+          />
+          <div
+            className="h-full bg-success"
+            style={{ width: `${sterilizeShare}%` }}
+            title={`Sterilize ${sterilizeShare.toFixed(1)}%`}
+          />
+        </div>
+        <div className="flex flex-wrap gap-3 text-xs text-muted">
+          <span className="inline-flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-accent" />
+            Decon {deconShare.toFixed(0)}%
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-brand" />
+            Assembly {assemblyShare.toFixed(0)}%
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-success" />
+            Sterilize {sterilizeShare.toFixed(0)}%
+          </span>
+        </div>
+      </section>
+
       <section className="grid gap-4 md:grid-cols-2">
         <div className="rounded-2xl border border-ink/10 bg-white/85 p-3">
           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">
@@ -263,6 +353,21 @@ const ReportCard = ({
                 <Radar dataKey="value" stroke="#2563eb" fill="#2563eb" fillOpacity={0.35} />
               </RadarChart>
             </ResponsiveContainer>
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <h4 className="text-sm font-semibold text-ink">Operational adds</h4>
+        <div className="grid gap-2 sm:grid-cols-1">
+          <div className="metric-chip">
+            <div className="flex items-center justify-between text-xs text-muted">
+              <span>Items per Load</span>
+            </div>
+            <div className="mt-2 text-lg font-semibold text-ink">
+              {itemsPerLoad.toFixed(1)}
+            </div>
+            <div className="text-[10px] text-muted">Items sterilized / load</div>
           </div>
         </div>
       </section>

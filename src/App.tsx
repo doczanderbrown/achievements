@@ -357,6 +357,8 @@ const App = () => {
     return rows
   }, [report, users, anonymize, activeLeaderboard])
 
+
+
   const selectAllShown = () => {
     setSelectedIds((prev) => {
       const next = new Set(prev)
@@ -687,7 +689,7 @@ const App = () => {
                   </option>
                 ))}
               </select>
-            ) : (
+            ) : viewMode === 'leaderboard' ? (
               <select
                 value={leaderboardKey}
                 onChange={(event) => setLeaderboardKey(event.target.value)}
@@ -699,7 +701,7 @@ const App = () => {
                   </option>
                 ))}
               </select>
-            )}
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-sm text-muted">
@@ -842,6 +844,7 @@ const App = () => {
             </div>
           </section>
         ) : null}
+
       </main>
 
       {report && selectedCount > 0 ? (
