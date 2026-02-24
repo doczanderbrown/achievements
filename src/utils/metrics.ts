@@ -159,6 +159,7 @@ export type UserScores = {
   productivity: number
   quality: number
   versatility: number
+  overall: number
   productivityPercentile: number
   qualityPercentile: number
   versatilityPercentile: number
@@ -599,6 +600,7 @@ export const buildReport = (
         productivity,
         quality,
         versatility,
+        overall: 0,
         productivityPercentile: 0,
         qualityPercentile: 0,
         versatilityPercentile: 0,
@@ -628,6 +630,9 @@ export const buildReport = (
         true,
       ),
     }
+
+    const overall =
+      scorePercentiles.productivityPercentile + scorePercentiles.qualityPercentile
 
     const contributionsTotal =
       user.pillarTotals.decon + user.pillarTotals.assembly + user.pillarTotals.sterilize
@@ -726,6 +731,7 @@ export const buildReport = (
       scores: {
         ...user.scores,
         ...scorePercentiles,
+        overall,
       },
       archetype,
       badges,

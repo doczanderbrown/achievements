@@ -71,6 +71,20 @@ const ScoreBlock = ({
   )
 }
 
+const OverallScoreBlock = ({ score }: { score: number }) => {
+  const percentileEquivalent = score / 2
+  const colorClass = getPercentileColor(percentileEquivalent)
+  return (
+    <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 shadow-sm">
+      <div className="text-xs uppercase tracking-[0.18em] text-muted">Overall</div>
+      <div className="mt-2 flex items-end justify-between">
+        <div className={`text-3xl font-semibold ${colorClass}`}>{score.toFixed(0)}</div>
+        <div className="text-xs font-medium text-muted">Prod + Quality</div>
+      </div>
+    </div>
+  )
+}
+
 const MetricScoreBlock = ({
   label,
   percentile,
@@ -225,7 +239,8 @@ const ReportCard = ({
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-4">
+        <OverallScoreBlock score={user.scores.overall} />
         <ScoreBlock
           label="Productivity"
           percentile={user.scores.productivityPercentile}

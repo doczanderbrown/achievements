@@ -12,7 +12,7 @@ import {
 } from './utils/metrics'
 import type { ProcessedReport, UserRecord } from './utils/metrics'
 
-type SortKey = 'productivity' | 'quality' | 'versatility' | 'hoursWorked'
+type SortKey = 'overall' | 'productivity' | 'quality' | 'versatility' | 'hoursWorked'
 type ViewMode = 'cards' | 'leaderboard'
 
 type LeaderboardOption = {
@@ -25,6 +25,7 @@ type LeaderboardOption = {
 }
 
 const sortOptions: Array<{ value: SortKey; label: string }> = [
+  { value: 'overall', label: 'Overall (Prod + Quality)' },
   { value: 'productivity', label: 'Productivity' },
   { value: 'quality', label: 'Quality' },
   { value: 'versatility', label: 'Versatility' },
@@ -32,6 +33,13 @@ const sortOptions: Array<{ value: SortKey; label: string }> = [
 ]
 
 const leaderboardOptions: LeaderboardOption[] = [
+  {
+    key: 'overall',
+    label: 'Overall (Prod + Quality)',
+    higherBetter: true,
+    type: 'score',
+    getValue: (user) => user.scores.overall,
+  },
   {
     key: 'productivity',
     label: 'Productivity',
@@ -223,6 +231,8 @@ const App = () => {
     if (viewMode === 'cards') {
       users.sort((a, b) => {
         switch (sortKey) {
+          case 'overall':
+            return b.scores.overall - a.scores.overall
           case 'quality':
             return b.scores.quality - a.scores.quality
           case 'versatility':
