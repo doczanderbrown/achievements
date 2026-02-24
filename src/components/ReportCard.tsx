@@ -74,13 +74,32 @@ const ScoreBlock = ({
 const OverallScoreBlock = ({ score }: { score: number }) => {
   const percentileEquivalent = score / 2
   const colorClass = getPercentileColor(percentileEquivalent)
+  const rounded = Math.round(percentileEquivalent)
+  const suffix = (() => {
+    const mod100 = rounded % 100
+    if (mod100 >= 11 && mod100 <= 13) return 'th'
+    switch (rounded % 10) {
+      case 1:
+        return 'st'
+      case 2:
+        return 'nd'
+      case 3:
+        return 'rd'
+      default:
+        return 'th'
+    }
+  })()
   return (
     <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 shadow-sm">
       <div className="text-xs uppercase tracking-[0.18em] text-muted">Overall</div>
       <div className="mt-2 flex items-end justify-between">
         <div className={`text-3xl font-semibold ${colorClass}`}>{score.toFixed(0)}</div>
-        <div className="text-xs font-medium text-muted">Prod + Quality</div>
+        <div className="text-xs font-medium text-muted">
+          {rounded}
+          {suffix} Percentile
+        </div>
       </div>
+      <div className="mt-1 text-[10px] uppercase tracking-[0.18em] text-muted">Prod + Quality</div>
     </div>
   )
 }
