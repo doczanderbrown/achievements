@@ -90,16 +90,17 @@ const OverallScoreBlock = ({ score }: { score: number }) => {
     }
   })()
   return (
-    <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 shadow-sm">
-      <div className="text-xs uppercase tracking-[0.18em] text-muted">Overall</div>
-      <div className="mt-2 flex items-end justify-between">
+    <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 text-center shadow-sm">
+      <div className="text-xs uppercase tracking-[0.18em] text-muted">
+        Overall Processing Score
+      </div>
+      <div className="mt-2 flex items-baseline justify-center gap-2">
         <div className={`text-3xl font-semibold ${colorClass}`}>{score.toFixed(0)}</div>
         <div className="text-xs font-medium text-muted">
           {rounded}
           {suffix} Percentile
         </div>
       </div>
-      <div className="mt-1 text-[10px] uppercase tracking-[0.18em] text-muted">Prod + Quality</div>
     </div>
   )
 }
@@ -258,20 +259,22 @@ const ReportCard = ({
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="space-y-3">
         <OverallScoreBlock score={user.scores.overall} />
-        <ScoreBlock
-          label="Productivity"
-          percentile={user.scores.productivityPercentile}
-        />
-        <MetricScoreBlock
-          label="Quality (Defect)"
-          percentile={user.percentiles.defectRate}
-        />
-        <MetricScoreBlock
-          label="Missing Instruments"
-          percentile={user.percentiles.assemblyMissingInst}
-        />
+        <div className="grid gap-3 md:grid-cols-3">
+          <ScoreBlock
+            label="Productivity"
+            percentile={user.scores.productivityPercentile}
+          />
+          <MetricScoreBlock
+            label="Quality (Defect)"
+            percentile={user.percentiles.defectRate}
+          />
+          <MetricScoreBlock
+            label="Missing Instruments"
+            percentile={user.percentiles.assemblyMissingInst}
+          />
+        </div>
       </div>
 
       <section>
