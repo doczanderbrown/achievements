@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="500" viewBox="0 0 1800 500">
+  
+  <g transform="translate(64.0,64.0)">
+    <svg width="320" height="320" viewBox="0 0 320 320">
+      
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
+  
+  <circle cx="160.0" cy="160.0" r="106.0" fill="none" stroke="#000000" stroke-width="22" />
+  <circle cx="160.0" cy="160.0" r="76.3" fill="none" stroke="#000000" stroke-width="14.3" opacity="0.55"/>
+  <path d="M 121.54480000000001 130.35744999999997 H 150.3862 C 159.19885000000002 130.35744999999997 168.0115 139.17009999999996 168.0115 147.98274999999998 V 162.40344999999996 C 168.0115 171.21609999999998 159.19885000000002 180.02874999999997 150.3862 180.02874999999997 H 121.54480000000001 C 112.73215 180.02874999999997 103.9195 171.21609999999998 103.9195 162.40344999999996 V 147.98274999999998 C 103.9195 139.17009999999996 112.73215 130.35744999999997 121.54480000000001 130.35744999999997 Z" fill="none" stroke="#000000" stroke-width="16.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 169.61380000000003 139.97125 H 198.45520000000002 C 207.26785000000004 139.97125 216.08050000000003 148.7839 216.08050000000003 157.59655 V 172.01725 C 216.08050000000003 180.8299 207.26785000000004 189.64255 198.45520000000002 189.64255 H 169.61380000000003 C 160.80115 189.64255 151.98850000000002 180.8299 151.98850000000002 172.01725 V 157.59655 C 151.98850000000002 148.7839 160.80115 139.97125 169.61380000000003 139.97125 Z" fill="none" stroke="#000000" stroke-width="16.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 149.58505 160.0 H 170.41495" fill="none" stroke="#000000" stroke-width="13.2" stroke-linecap="round" opacity="0.85"/>
+
+    </svg>
+  </g>
+  <text x="440" y="222.0" fill="#000000" font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif" font-size="92" font-weight="700" text-anchor="start">FCSPA</text>
+  <text x="440" y="286.0" fill="#000000" font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif" font-size="36" font-weight="500" text-anchor="start" opacity="0.9">HSPA Chapter | First Coast Sterilization Professionals Association</text>
+</svg>

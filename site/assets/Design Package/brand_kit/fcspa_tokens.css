@@ -1,0 +1,11 @@
+/* FCSPA brand tokens */
+:root {
+  --fcspa-navy: #0E2A3A;
+  --fcspa-teal: #0F5C5E;
+  --fcspa-light-gray: #E6ECEF;
+  --fcspa-steel-gray: #4F5B66;
+  --fcspa-accent: #3A8F7B;
+
+  --fcspa-font-sans: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  --fcspa-font-serif: Merriweather, Georgia, serif;
+}

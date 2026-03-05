@@ -9,8 +9,11 @@
   --muted-rgb: 101 110 125;
   --canvas-rgb: 242 244 247;
   --panel-rgb: 255 255 255;
+  --stroke-rgb: 226 232 240;
   --brand-rgb: 245 158 11;
   --accent-rgb: 37 99 235;
+  --accent-2-rgb: 37 99 235;
+  --accent-3-rgb: 22 163 74;
   --warning-rgb: 245 158 11;
   --success-rgb: 22 163 74;
 }
