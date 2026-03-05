@@ -1,0 +1,494 @@
+import { Unzip, UnzipInflate } from 'fflate'
+import type { RtlsParseProgress, RtlsScanDataset } from '../types'
+
+type EntryHandler = {
+  onChunk: (chunk: Uint8Array, final: boolean) => void
+}
+
+type ParsedCell = {
+  type: string
+  value: string
+}
+
+type ParsedCells = Record<string, ParsedCell>
+
+type SheetRef = {
+  name: string
+  entry: string
+}
+
+const WORKBOOK_ENTRY = 'xl/workbook.xml'
+const WORKBOOK_RELS_ENTRY = 'xl/_rels/workbook.xml.rels'
+const SHARED_STRINGS_ENTRY = 'xl/sharedStrings.xml'
+const TARGET_COLS = new Set(['B', 'J', 'K', 'M', 'O', 'P', 'R', 'S', 'AG', 'AH', 'AI'])
+
+const ROW_CLOSE = '</row>'
+const SHARED_STRING_CLOSE = '</si>'
+const MAX_BUFFER = 400_000
+const DECODE_SLICE_BYTES = 1_000_000
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const decodeXmlEntities = (value: string) => {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+}
+
+const extractRowNumber = (rowXml: string) => {
+  const match = rowXml.match(/<row\b[^>]*\br="(\d+)"/)
+  if (!match) return null
+  const parsed = Number.parseInt(match[1], 10)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const extractTargetCells = (rowXml: string, targetCols: Set<string>): ParsedCells => {
+  const cells: ParsedCells = {}
+  const cellPattern = /<c\b([^>]*)>([\s\S]*?)<\/c>/g
+  let match: RegExpExecArray | null = null
+
+  while ((match = cellPattern.exec(rowXml)) !== null) {
+    const attributes = match[1]
+    const body = match[2]
+
+    const refMatch = attributes.match(/\br="([A-Z]+)\d+"/)
+    if (!refMatch) continue
+
+    const column = refMatch[1]
+    if (!targetCols.has(column)) continue
+
+    const typeMatch = attributes.match(/\bt="([^"]+)"/)
+    const type = typeMatch ? typeMatch[1] : ''
+
+    let value = ''
+    if (type === 'inlineStr') {
+      const textPattern = /<t[^>]*>([\s\S]*?)<\/t>/g
+      let textMatch: RegExpExecArray | null = null
+      const parts: string[] = []
+      while ((textMatch = textPattern.exec(body)) !== null) {
+        parts.push(decodeXmlEntities(textMatch[1]))
+      }
+      value = parts.join('')
+    } else {
+      const valueMatch = body.match(/<v[^>]*>([\s\S]*?)<\/v>/)
+      value = valueMatch ? decodeXmlEntities(valueMatch[1]) : ''
+    }
+
+    cells[column] = { type, value }
+  }
+
+  return cells
+}
+
+const createWorksheetRowParser = (
+  targetCols: Set<string>,
+  onRow: (rowNumber: number, cells: ParsedCells) => void,
+): EntryHandler => {
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  const consumeText = (text: string) => {
+    if (!text) return
+    buffer += text
+
+    while (true) {
+      const rowStart = buffer.indexOf('<row')
+      if (rowStart === -1) {
+        if (buffer.length > MAX_BUFFER) {
+          buffer = buffer.slice(-MAX_BUFFER)
+        }
+        break
+      }
+
+      const rowEnd = buffer.indexOf(ROW_CLOSE, rowStart)
+      if (rowEnd === -1) {
+        if (rowStart > 0) {
+          buffer = buffer.slice(rowStart)
+        }
+        if (buffer.length > MAX_BUFFER) {
+          buffer = buffer.slice(-MAX_BUFFER)
+        }
+        break
+      }
+
+      const rowXml = buffer.slice(rowStart, rowEnd + ROW_CLOSE.length)
+      buffer = buffer.slice(rowEnd + ROW_CLOSE.length)
+
+      const rowNumber = extractRowNumber(rowXml)
+      if (!rowNumber) continue
+      const cells = extractTargetCells(rowXml, targetCols)
+      onRow(rowNumber, cells)
+    }
+  }
+
+  return {
+    onChunk: (chunk, final) => {
+      if (chunk.length === 0) {
+        consumeText(decoder.decode(chunk, { stream: !final }))
+        return
+      }
+
+      for (let offset = 0; offset < chunk.length; offset += DECODE_SLICE_BYTES) {
+        const end = Math.min(offset + DECODE_SLICE_BYTES, chunk.length)
+        const isLastSlice = final && end === chunk.length
+        consumeText(decoder.decode(chunk.subarray(offset, end), { stream: !isLastSlice }))
+      }
+    },
+  }
+}
+
+const createSharedStringsParser = (
+  neededIndices: Set<number>,
+  sharedLookup: Map<number, string>,
+): EntryHandler => {
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  let sharedIndex = -1
+  const consumeText = (text: string) => {
+    if (!text) return
+    buffer += text
+
+    while (true) {
+      const itemStart = buffer.indexOf('<si')
+      if (itemStart === -1) {
+        if (buffer.length > MAX_BUFFER) {
+          buffer = buffer.slice(-MAX_BUFFER)
+        }
+        break
+      }
+
+      const itemEnd = buffer.indexOf(SHARED_STRING_CLOSE, itemStart)
+      if (itemEnd === -1) {
+        if (itemStart > 0) {
+          buffer = buffer.slice(itemStart)
+        }
+        if (buffer.length > MAX_BUFFER) {
+          buffer = buffer.slice(-MAX_BUFFER)
+        }
+        break
+      }
+
+      const sharedXml = buffer.slice(itemStart, itemEnd + SHARED_STRING_CLOSE.length)
+      buffer = buffer.slice(itemEnd + SHARED_STRING_CLOSE.length)
+      sharedIndex += 1
+
+      if (!neededIndices.has(sharedIndex)) continue
+
+      const textPattern = /<t[^>]*>([\s\S]*?)<\/t>/g
+      let textMatch: RegExpExecArray | null = null
+      const parts: string[] = []
+      while ((textMatch = textPattern.exec(sharedXml)) !== null) {
+        parts.push(decodeXmlEntities(textMatch[1]))
+      }
+      sharedLookup.set(sharedIndex, parts.join(''))
+    }
+  }
+
+  return {
+    onChunk: (chunk, final) => {
+      if (chunk.length === 0) {
+        consumeText(decoder.decode(chunk, { stream: !final }))
+        return
+      }
+
+      for (let offset = 0; offset < chunk.length; offset += DECODE_SLICE_BYTES) {
+        const end = Math.min(offset + DECODE_SLICE_BYTES, chunk.length)
+        const isLastSlice = final && end === chunk.length
+        consumeText(decoder.decode(chunk.subarray(offset, end), { stream: !isLastSlice }))
+      }
+    },
+  }
+}
+
+const runZipPass = async (file: File, handlers: Map<string, EntryHandler>) => {
+  return new Promise<void>((resolve, reject) => {
+    const unzip = new Unzip((entry) => {
+      const handler = handlers.get(entry.name)
+      if (!handler) {
+        entry.terminate()
+        return
+      }
+
+      entry.ondata = (err, data, final) => {
+        if (err) {
+          reject(err)
+          return
+        }
+        try {
+          handler.onChunk(data, final)
+        } catch (parseError) {
+          reject(parseError as Error)
+        }
+      }
+      entry.start()
+    })
+
+    unzip.register(UnzipInflate)
+
+    const reader = file.stream().getReader()
+    let settled = false
+
+    const fail = (error: unknown) => {
+      if (settled) return
+      settled = true
+      reject(error)
+      reader.cancel().catch(() => {})
+    }
+
+    const pump = async () => {
+      try {
+        while (true) {
+          const { value, done } = await reader.read()
+          unzip.push(value ?? new Uint8Array(0), done)
+          if (done) break
+        }
+        if (!settled) {
+          settled = true
+          resolve()
+        }
+      } catch (error) {
+        fail(error)
+      }
+    }
+
+    pump().catch(fail)
+  })
+}
+
+const createXmlCollector = (onComplete: (xml: string) => void): EntryHandler => {
+  const decoder = new TextDecoder('utf-8')
+  let xml = ''
+
+  return {
+    onChunk: (chunk, final) => {
+      if (chunk.length === 0) {
+        xml += decoder.decode(chunk, { stream: !final })
+      } else {
+        for (let offset = 0; offset < chunk.length; offset += DECODE_SLICE_BYTES) {
+          const end = Math.min(offset + DECODE_SLICE_BYTES, chunk.length)
+          const isLastSlice = final && end === chunk.length
+          xml += decoder.decode(chunk.subarray(offset, end), { stream: !isLastSlice })
+        }
+      }
+      if (final) {
+        onComplete(xml)
+      }
+    },
+  }
+}
+
+const normalizeEntryPath = (target: string) => {
+  const clean = target.trim().replace(/\\/g, '/')
+  if (!clean) return null
+  if (clean.startsWith('/')) return clean.slice(1)
+  if (clean.startsWith('xl/')) return clean
+  return `xl/${clean}`
+}
+
+const resolveSheetEntry = async (file: File) => {
+  let workbookXml = ''
+  let relsXml = ''
+
+  await runZipPass(
+    file,
+    new Map<string, EntryHandler>([
+      [WORKBOOK_ENTRY, createXmlCollector((xml) => (workbookXml = xml))],
+      [WORKBOOK_RELS_ENTRY, createXmlCollector((xml) => (relsXml = xml))],
+    ]),
+  )
+
+  const relIdToEntry = new Map<string, string>()
+  const relPattern = /<Relationship\b[^>]*\bId="([^"]+)"[^>]*\bTarget="([^"]+)"/g
+  let relMatch: RegExpExecArray | null = null
+  while ((relMatch = relPattern.exec(relsXml)) !== null) {
+    const relId = relMatch[1]
+    const entry = normalizeEntryPath(relMatch[2])
+    if (entry) {
+      relIdToEntry.set(relId, entry)
+    }
+  }
+
+  const sheets: SheetRef[] = []
+  const sheetPattern = /<sheet\b[^>]*\bname="([^"]+)"[^>]*\br:id="([^"]+)"/g
+  let sheetMatch: RegExpExecArray | null = null
+  while ((sheetMatch = sheetPattern.exec(workbookXml)) !== null) {
+    const name = sheetMatch[1]
+    const relId = sheetMatch[2]
+    const entry = relIdToEntry.get(relId)
+    if (!entry) continue
+    sheets.push({ name, entry })
+  }
+
+  if (sheets.length === 0) return null
+
+  const preferred = ['scan', 'analytic', 'history']
+  for (const needle of preferred) {
+    const found = sheets.find((sheet) => sheet.name.toLowerCase().includes(needle))
+    if (found) return found.entry
+  }
+
+  return sheets[0].entry
+}
+
+const parseExcelSerial = (...candidates: Array<string | undefined>) => {
+  for (const candidate of candidates) {
+    const trimmed = (candidate ?? '').trim()
+    if (!trimmed) continue
+
+    const numeric = Number.parseFloat(trimmed)
+    if (Number.isFinite(numeric) && numeric > 20_000) return numeric
+
+    const parsed = Date.parse(trimmed)
+    if (!Number.isNaN(parsed)) {
+      return parsed / DAY_MS + 25569
+    }
+  }
+  return null
+}
+
+const parseTokenKey = (
+  cell: ParsedCell | undefined,
+  neededSharedIndices: Set<number>,
+  rawValueToId: Map<string, number>,
+  rawValueLookup: string[],
+) => {
+  if (!cell) return 0
+  const value = cell.value.trim()
+  if (!value) return 0
+
+  if (cell.type === 's') {
+    const index = Number.parseInt(value, 10)
+    if (!Number.isFinite(index)) return 0
+    neededSharedIndices.add(index)
+    return index + 1
+  }
+
+  const existing = rawValueToId.get(value)
+  if (existing !== undefined) return -existing
+
+  const nextId = rawValueLookup.length + 1
+  rawValueLookup.push(value)
+  rawValueToId.set(value, nextId)
+  return -nextId
+}
+
+export const decodeTokenKey = (
+  key: number,
+  sharedLookup: Map<number, string>,
+  rawValueLookup: string[],
+) => {
+  if (key === 0) return ''
+  if (key > 0) {
+    return sharedLookup.get(key - 1) ?? ''
+  }
+  return rawValueLookup[Math.abs(key) - 1] ?? ''
+}
+
+export const parseRtlsScanWorkbook = async (
+  file: File,
+  onProgress?: (progress: RtlsParseProgress) => void,
+): Promise<RtlsScanDataset> => {
+  const sheetEntry = await resolveSheetEntry(file)
+  if (!sheetEntry) {
+    throw new Error('Workbook format not recognized. No worksheet could be located.')
+  }
+
+  const neededSharedIndices = new Set<number>()
+  const rawValueLookup: string[] = []
+  const rawValueToId = new Map<string, number>()
+
+  const invKeys: number[] = []
+  const locationKeys: number[] = []
+  const aliasUserKeys: number[] = []
+  const userKeys: number[] = []
+  const stateKeys: number[] = []
+  const substateKeys: number[] = []
+  const workflowKeys: number[] = []
+  const timestampSerials: number[] = []
+
+  let parsedRows = 0
+
+  const worksheetParser = createWorksheetRowParser(TARGET_COLS, (rowNumber, cells) => {
+    if (rowNumber === 1) return
+    parsedRows += 1
+
+    if (parsedRows % 50_000 === 0) {
+      onProgress?.({
+        phase: 'sheets',
+        message: `Reading scan rows (${parsedRows.toLocaleString()})`,
+        rowsParsed: parsedRows,
+      })
+    }
+
+    const invKey = parseTokenKey(cells.B, neededSharedIndices, rawValueToId, rawValueLookup)
+    if (invKey === 0) return
+
+    const locationKey =
+      parseTokenKey(cells.P, neededSharedIndices, rawValueToId, rawValueLookup) ||
+      parseTokenKey(cells.O, neededSharedIndices, rawValueToId, rawValueLookup) ||
+      parseTokenKey(cells.K, neededSharedIndices, rawValueToId, rawValueLookup) ||
+      parseTokenKey(cells.J, neededSharedIndices, rawValueToId, rawValueLookup)
+    if (locationKey === 0) return
+
+    const timestampSerial = parseExcelSerial(cells.AI?.value, cells.AH?.value, cells.AG?.value)
+    if (timestampSerial === null) return
+
+    invKeys.push(invKey)
+    locationKeys.push(locationKey)
+    aliasUserKeys.push(
+      parseTokenKey(cells.R, neededSharedIndices, rawValueToId, rawValueLookup),
+    )
+    userKeys.push(parseTokenKey(cells.S, neededSharedIndices, rawValueToId, rawValueLookup))
+    stateKeys.push(parseTokenKey(cells.J, neededSharedIndices, rawValueToId, rawValueLookup))
+    substateKeys.push(parseTokenKey(cells.K, neededSharedIndices, rawValueToId, rawValueLookup))
+    workflowKeys.push(parseTokenKey(cells.M, neededSharedIndices, rawValueToId, rawValueLookup))
+    timestampSerials.push(timestampSerial)
+  })
+
+  onProgress?.({ phase: 'sheets', message: 'Reading worksheet rows...', rowsParsed: 0 })
+
+  await runZipPass(file, new Map<string, EntryHandler>([[sheetEntry, worksheetParser]]))
+
+  if (parsedRows === 0 || invKeys.length === 0) {
+    throw new Error('No scan rows were parsed. Please verify this is a scan-history export.')
+  }
+
+  const sharedLookup = new Map<number, string>()
+  if (neededSharedIndices.size > 0) {
+    onProgress?.({
+      phase: 'shared-strings',
+      message: 'Decoding text labels...',
+      rowsParsed: parsedRows,
+    })
+
+    await runZipPass(
+      file,
+      new Map<string, EntryHandler>([
+        [SHARED_STRINGS_ENTRY, createSharedStringsParser(neededSharedIndices, sharedLookup)],
+      ]),
+    )
+  }
+
+  onProgress?.({
+    phase: 'complete',
+    message: 'Workbook parse complete.',
+    rowsParsed: parsedRows,
+  })
+
+  return {
+    rows: {
+      invKeys: Int32Array.from(invKeys),
+      locationKeys: Int32Array.from(locationKeys),
+      aliasUserKeys: Int32Array.from(aliasUserKeys),
+      userKeys: Int32Array.from(userKeys),
+      stateKeys: Int32Array.from(stateKeys),
+      substateKeys: Int32Array.from(substateKeys),
+      workflowKeys: Int32Array.from(workflowKeys),
+      timestampSerials: Float64Array.from(timestampSerials),
+    },
+    sharedLookup,
+    rawValueLookup,
+    parsedRows,
+  }
+}

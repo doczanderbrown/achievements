@@ -1,9 +1,14 @@
 import { useState } from 'react'
 import InTransitDashboardApp from './apps/inTransit/InTransitDashboardApp'
 import ProcessingLocationReportApp from './apps/ProcessingLocationReportApp'
+import RtlsAccuracyApp from './apps/RtlsAccuracyApp'
 import SpdReportCardApp from './apps/SpdReportCardApp'
 
-type SuiteAppId = 'spd-report-card' | 'processing-location' | 'in-transit-dashboard'
+type SuiteAppId =
+  | 'spd-report-card'
+  | 'processing-location'
+  | 'in-transit-dashboard'
+  | 'rtls-accuracy'
 
 type SuiteAppDefinition = {
   id: SuiteAppId
@@ -42,6 +47,15 @@ const suiteApps: SuiteAppDefinition[] = [
     status: 'Live',
     ctaLabel: 'Open app',
   },
+  {
+    id: 'rtls-accuracy',
+    title: 'RTLS Accuracy Analyzer',
+    subtitle: 'ilocs vs human scan correspondence',
+    description:
+      'Upload scan history to match ilocs room-change events against human scans, measure lag windows, and review path transitions.',
+    status: 'Live',
+    ctaLabel: 'Open app',
+  },
 ]
 
 const App = () => {
@@ -57,6 +71,10 @@ const App = () => {
 
   if (activeApp === 'in-transit-dashboard') {
     return <InTransitDashboardApp onBack={() => setActiveApp(null)} />
+  }
+
+  if (activeApp === 'rtls-accuracy') {
+    return <RtlsAccuracyApp onBack={() => setActiveApp(null)} />
   }
 
   return (
