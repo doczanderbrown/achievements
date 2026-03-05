@@ -1,4 +1,11 @@
 services:
+  pdf-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: myapp-pdf-api
+    restart: unless-stopped
+
   myapp:
     build:
       context: .
@@ -6,6 +13,8 @@ services:
       args:
         VITE_BASE_PATH: /tools/
     container_name: myapp
+    depends_on:
+      - pdf-api
     ports:
       - "3000:3000"
     restart: unless-stopped

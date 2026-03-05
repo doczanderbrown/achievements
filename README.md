@@ -71,3 +71,25 @@ export default defineConfig([
   },
 ])
 ```
+
+## PDF Export API
+
+Large SPD report-card exports can be generated server-side through:
+
+- `GET /api/health`
+- `POST /api/report-cards/pdf` (`multipart/form-data`, field name: `cards`)
+
+Local development:
+
+```bash
+npm run dev:api   # starts API on :3001
+npm run dev       # starts Vite on :5173 (proxies /api -> :3001)
+```
+
+Docker:
+
+```bash
+docker compose up --build
+```
+
+The web container proxies `/api/*` to the `pdf-api` container.

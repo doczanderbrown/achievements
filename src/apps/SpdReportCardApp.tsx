@@ -133,6 +133,10 @@ const getUserKey = (user: UserRecord) => {
   return `${idPart}-${user.techLabel}`
 }
 
+const EXPORT_RENDER_SCALE = 1.35
+const EXPORT_YIELD_EVERY = 4
+const EXPORT_JPEG_QUALITY = 0.82
+
 const formatOrdinal = (value: number) => {
   const rounded = Math.round(value)
   const mod100 = rounded % 100
@@ -153,6 +157,15 @@ type SpdReportCardAppProps = {
   onBack?: () => void
 }
 
+type ExportKind = 'pdf' | 'png'
+
+type ExportProgress = {
+  kind: ExportKind
+  phase: string
+  current: number
+  total: number
+}
+
 const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
   const [report, setReport] = useState<ProcessedReport | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -164,6 +177,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
   const [leaderboardKey, setLeaderboardKey] = useState<string>(leaderboardOptions[0].key)
   const [anonymize, setAnonymize] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null)
   const [selectedUser, setSelectedUser] = useState<UserRecord | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [hoursWorkedAvailable, setHoursWorkedAvailable] = useState(true)
@@ -251,84 +265,243 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
     return users
   }, [report, search, sortKey, viewMode])
 
-  const exportCardsToPng = async (users: UserRecord[]) => {
-    if (!users.length) return
-    setExporting(true)
+  const getExportCardMap = () => {
     const cards = Array.from(
       exportRef.current?.querySelectorAll<HTMLElement>('[data-report-card]') ?? [],
     )
-    const cardMap = new Map(cards.map((card) => [card.dataset.reportCardKey, card]))
+    const cardMap = new Map<string, HTMLElement>()
+    cards.forEach((card) => {
+      const key = card.dataset.reportCardKey
+      if (key) {
+        cardMap.set(key, card)
+      }
+    })
+    return cardMap
+  }
+
+  const renderCardCanvas = (card: HTMLElement) =>
+    html2canvas(card, {
+      scale: EXPORT_RENDER_SCALE,
+      backgroundColor: '#ffffff',
+      logging: false,
+    })
+
+  const renderCardJpegBlob = async (card: HTMLElement) => {
+    const canvas = await renderCardCanvas(card)
+    try {
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, 'image/jpeg', EXPORT_JPEG_QUALITY),
+      )
+      return blob
+    } finally {
+      canvas.width = 0
+      canvas.height = 0
+    }
+  }
+
+  const triggerBlobDownload = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const isPdfApiAvailable = async () => {
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), 1500)
+    try {
+      const response = await fetch('/api/health', {
+        method: 'GET',
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      return response.ok
+    } catch {
+      return false
+    } finally {
+      window.clearTimeout(timeoutId)
+    }
+  }
+
+  const exportCardsToPdfServer = async (users: UserRecord[], cardMap: Map<string, HTMLElement>) => {
+    const formData = new FormData()
+    formData.append('filename', 'report-cards.pdf')
+    let imageCount = 0
+
     for (let i = 0; i < users.length; i += 1) {
       const user = users[i]
       const key = getUserKey(user)
       const card = cardMap.get(key)
+      setExportProgress({
+        kind: 'pdf',
+        phase: 'Rendering cards',
+        current: i + 1,
+        total: users.length,
+      })
       if (!card) continue
-      const canvas = await html2canvas(card, { scale: 2, backgroundColor: '#ffffff' })
-      const link = document.createElement('a')
-      const label = anonymize ? user.techLabel : user.name
-      link.download = `${sanitizeFileName(label || `report-${i + 1}`)}.png`
-      link.href = canvas.toDataURL('image/png')
-      link.click()
+
+      const blob = await renderCardJpegBlob(card)
+      if (!blob) continue
+      imageCount += 1
+      formData.append('cards', blob, `report-card-${imageCount}.jpg`)
+
+      if ((i + 1) % EXPORT_YIELD_EVERY === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      }
     }
-    setExporting(false)
+
+    if (imageCount === 0) return false
+
+    setExportProgress({
+      kind: 'pdf',
+      phase: 'Generating PDF on server',
+      current: users.length,
+      total: users.length,
+    })
+
+    const response = await fetch('/api/report-cards/pdf', {
+      method: 'POST',
+      body: formData,
+    })
+    if (!response.ok) {
+      throw new Error(`PDF API returned ${response.status}`)
+    }
+
+    setExportProgress({
+      kind: 'pdf',
+      phase: 'Downloading PDF',
+      current: users.length,
+      total: users.length,
+    })
+
+    const pdfBlob = await response.blob()
+    triggerBlobDownload(pdfBlob, 'report-cards.pdf')
+    return true
   }
 
-  const exportCardsToPdf = async (users: UserRecord[]) => {
-    if (!users.length) return
-    setExporting(true)
-    const cards = Array.from(
-      exportRef.current?.querySelectorAll<HTMLElement>('[data-report-card]') ?? [],
-    )
-    const cardMap = new Map(cards.map((card) => [card.dataset.reportCardKey, card]))
+  const exportCardsToPdfClient = async (users: UserRecord[], cardMap: Map<string, HTMLElement>) => {
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
     const margin = 24
-    const gutter = 16
-    const cardWidth = (pageWidth - margin * 2 - gutter) / 2
+    const maxWidth = pageWidth - margin * 2
+    const maxHeight = pageHeight - margin * 2
 
-    let x = margin
-    let y = margin
-    let rowHeight = 0
+    let pageCount = 0
 
     for (let i = 0; i < users.length; i += 1) {
       const user = users[i]
       const key = getUserKey(user)
       const card = cardMap.get(key)
+      setExportProgress({
+        kind: 'pdf',
+        phase: 'Building PDF in browser',
+        current: i + 1,
+        total: users.length,
+      })
       if (!card) continue
-      const canvas = await html2canvas(card, { scale: 2, backgroundColor: '#ffffff' })
-      const aspect = canvas.height / canvas.width
-      const renderWidth = cardWidth
-      const renderHeight = renderWidth * aspect
 
-      if (y + renderHeight > pageHeight - margin) {
-        pdf.addPage()
-        x = margin
-        y = margin
-        rowHeight = 0
+      const canvas = await renderCardCanvas(card)
+      try {
+        const aspect = canvas.height / canvas.width
+        let renderWidth = maxWidth
+        let renderHeight = renderWidth * aspect
+        if (renderHeight > maxHeight) {
+          renderHeight = maxHeight
+          renderWidth = renderHeight / aspect
+        }
+
+        if (pageCount > 0) {
+          pdf.addPage()
+        }
+
+        const x = (pageWidth - renderWidth) / 2
+        const y = (pageHeight - renderHeight) / 2
+        pdf.addImage(canvas, 'JPEG', x, y, renderWidth, renderHeight, undefined, 'FAST')
+        pageCount += 1
+      } finally {
+        canvas.width = 0
+        canvas.height = 0
       }
 
-      pdf.addImage(
-        canvas.toDataURL('image/png'),
-        'PNG',
-        x,
-        y,
-        renderWidth,
-        renderHeight,
-      )
-
-      rowHeight = Math.max(rowHeight, renderHeight)
-      if (x === margin) {
-        x = margin + cardWidth + gutter
-      } else {
-        x = margin
-        y += rowHeight + gutter
-        rowHeight = 0
+      if ((i + 1) % EXPORT_YIELD_EVERY === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
       }
     }
 
-    pdf.save('report-cards.pdf')
-    setExporting(false)
+    if (pageCount > 0) {
+      setExportProgress({
+        kind: 'pdf',
+        phase: 'Finalizing PDF',
+        current: users.length,
+        total: users.length,
+      })
+      pdf.save('report-cards.pdf')
+    }
+  }
+
+  const exportCardsToPng = async (users: UserRecord[]) => {
+    if (!users.length) return
+    setExporting(true)
+    setExportProgress({ kind: 'png', phase: 'Rendering PNGs', current: 0, total: users.length })
+    try {
+      const cardMap = getExportCardMap()
+      for (let i = 0; i < users.length; i += 1) {
+        const user = users[i]
+        const key = getUserKey(user)
+        const card = cardMap.get(key)
+        setExportProgress({
+          kind: 'png',
+          phase: 'Rendering PNGs',
+          current: i + 1,
+          total: users.length,
+        })
+        if (!card) continue
+        const canvas = await html2canvas(card, { scale: 2, backgroundColor: '#ffffff' })
+        const link = document.createElement('a')
+        const label = anonymize ? user.techLabel : user.name
+        link.download = `${sanitizeFileName(label || `report-${i + 1}`)}.png`
+        link.href = canvas.toDataURL('image/png')
+        link.click()
+      }
+    } finally {
+      setExporting(false)
+      setExportProgress(null)
+    }
+  }
+
+  const exportCardsToPdf = async (users: UserRecord[]) => {
+    if (!users.length || exporting) return
+    setExporting(true)
+    setExportProgress({
+      kind: 'pdf',
+      phase: 'Checking export service',
+      current: 0,
+      total: users.length,
+    })
+    try {
+      await document.fonts.ready
+      const cardMap = getExportCardMap()
+      const canUsePdfApi = await isPdfApiAvailable()
+
+      if (canUsePdfApi) {
+        try {
+          const exportedByApi = await exportCardsToPdfServer(users, cardMap)
+          if (exportedByApi) return
+        } catch {
+          // Fall back to browser-generated PDF when API export fails.
+        }
+      }
+
+      await exportCardsToPdfClient(users, cardMap)
+    } catch {
+      setError('PDF export failed. Try reducing the selection or exporting PNG files.')
+    } finally {
+      setExporting(false)
+      setExportProgress(null)
+    }
   }
 
   const users = filteredUsers
@@ -338,6 +511,18 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
   )
 
   const selectedCount = selectedUsers.length
+  const pdfProgressText =
+    exportProgress && exportProgress.kind === 'pdf'
+      ? `${exportProgress.phase}${
+          exportProgress.total > 0 ? ` (${exportProgress.current}/${exportProgress.total})` : ''
+        }`
+      : null
+  const pngProgressText =
+    exportProgress && exportProgress.kind === 'png'
+      ? `${exportProgress.phase}${
+          exportProgress.total > 0 ? ` (${exportProgress.current}/${exportProgress.total})` : ''
+        }`
+      : null
 
   const toggleSelected = (user: UserRecord) => {
     const key = getUserKey(user)
@@ -743,7 +928,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                   onClick={() => exportCardsToPdf(selectedUsers)}
                   disabled={exporting || selectedCount === 0}
                 >
-                  {exporting ? 'Exporting...' : `${selectedCount} cards to PDF`}
+                  {pdfProgressText ?? (exporting ? 'Exporting...' : `${selectedCount} cards to PDF`)}
                 </button>
                 <button
                   type="button"
@@ -751,7 +936,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                   onClick={() => exportCardsToPng(selectedUsers)}
                   disabled={exporting || selectedCount === 0}
                 >
-                  {exporting ? 'Exporting...' : `${selectedCount} cards to PNG`}
+                  {pngProgressText ?? (exporting ? 'Exporting...' : `${selectedCount} cards to PNG`)}
                 </button>
               </div>
             ) : null}
