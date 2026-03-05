@@ -7,6 +7,7 @@ export type RtlsParseProgress = {
 export type RtlsScanDataset = {
   rows: {
     invKeys: Int32Array
+    invNameKeys: Int32Array
     locationKeys: Int32Array
     aliasUserKeys: Int32Array
     userKeys: Int32Array
@@ -22,6 +23,7 @@ export type RtlsScanDataset = {
   beaconFilterApplied: boolean
   beaconedAssetsCount: number
   excludedNonBeaconRows: number
+  excludedInvNameSummaries: RtlsExcludedInvNameSummary[]
 }
 
 export type RtlsAnalysisConfig = {
@@ -47,12 +49,69 @@ export type RtlsTransitionSummary = {
   offPath: boolean
 }
 
+export type RtlsExcludedInvNameSummary = {
+  invName: string
+  count: number
+}
+
+export type RtlsEventDetail = {
+  invId: string
+  invName: string
+  scannerType: 'ilocs' | 'human'
+  location: string
+  stage: string
+  state: string
+  substate: string
+  workflowRule: string
+  aliasUser: string
+  userName: string
+  timestampSerial: number
+}
+
+export type RtlsMatchDetail = {
+  invId: string
+  invName: string
+  location: string
+  stage: string
+  ilocsAliasUser: string
+  humanAliasUser: string
+  ilocsTimestampSerial: number
+  humanTimestampSerial: number
+  lagHours: number
+}
+
+export type RtlsTransitionDetail = {
+  invId: string
+  invName: string
+  fromStage: string
+  toStage: string
+  fromLocation: string
+  toLocation: string
+  fromTimestampSerial: number
+  toTimestampSerial: number
+  offPath: boolean
+}
+
+export type RtlsDrilldowns = {
+  ilocsEvents: RtlsEventDetail[]
+  humanEvents: RtlsEventDetail[]
+  matchedEvents: RtlsMatchDetail[]
+  unmatchedIlocsEvents: RtlsEventDetail[]
+  unmatchedHumanEvents: RtlsEventDetail[]
+  lagBucketMatches: Record<string, RtlsMatchDetail[]>
+  stageEvents: Record<string, RtlsEventDetail[]>
+  transitionEvents: Record<string, RtlsTransitionDetail[]>
+  offPathTransitionEvents: Record<string, RtlsTransitionDetail[]>
+  excludedInvNames: RtlsExcludedInvNameSummary[]
+}
+
 export type RtlsAnalysisResult = {
   parsedRows: number
   rawParsedRows: number
   beaconFilterApplied: boolean
   beaconedAssetsCount: number
   excludedNonBeaconRows: number
+  excludedInvNameSummaries: RtlsExcludedInvNameSummary[]
   ilocsRoomChanges: number
   humanRoomChanges: number
   matchedRoomChanges: number
@@ -71,4 +130,5 @@ export type RtlsAnalysisResult = {
   stageSummaries: RtlsStageSummary[]
   transitionSummaries: RtlsTransitionSummary[]
   offPathTransitions: RtlsTransitionSummary[]
+  drilldowns: RtlsDrilldowns
 }

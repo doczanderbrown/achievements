@@ -1,15 +1,15 @@
-import type { RtlsAnalysisConfig, RtlsAnalysisResult, RtlsScanDataset } from '../types'
+import type {
+  RtlsAnalysisConfig,
+  RtlsAnalysisResult,
+  RtlsDrilldowns,
+  RtlsEventDetail,
+  RtlsMatchDetail,
+  RtlsScanDataset,
+  RtlsTransitionDetail,
+} from '../types'
 import { decodeTokenKey } from './parseRtlsScanWorkbook'
 
-const STAGE_ORDER = [
-  'Decon',
-  'Assembly',
-  'Sterilize',
-  'Transport',
-  'Storage',
-  'Case',
-  'Other',
-]
+const STAGE_ORDER = ['Decon', 'Assembly', 'Sterilize', 'Transport', 'Storage', 'Case', 'Other']
 
 const EXPECTED_STAGE_EDGES = new Set([
   'Assembly->Sterilize',
@@ -22,6 +22,15 @@ const EXPECTED_STAGE_EDGES = new Set([
   'Storage->Assembly',
   'Storage->Sterilize',
 ])
+
+const LAG_BUCKET_LABELS = [
+  'Human Before ilocs',
+  '0-15 Minutes',
+  '15-60 Minutes',
+  '1-4 Hours',
+  '4-8 Hours',
+  '8+ Hours',
+]
 
 const round2 = (value: number) => Number(value.toFixed(2))
 const toPercent = (value: number, total: number) => (total > 0 ? (value / total) * 100 : 0)
@@ -39,7 +48,8 @@ const quantile = (sortedValues: number[], percentile: number) => {
 
 const normalize = (value: string) => value.trim().toLowerCase()
 
-const includesAny = (value: string, needles: string[]) => needles.some((needle) => value.includes(needle))
+const includesAny = (value: string, needles: string[]) =>
+  needles.some((needle) => value.includes(needle))
 
 const classifyStage = (location: string, substate: string, workflowRule: string, state: string) => {
   const text = normalize(`${location} ${substate} ${workflowRule} ${state}`)
@@ -149,7 +159,38 @@ const incrementCount = (map: Map<string, number>, key: string) => {
   map.set(key, (map.get(key) ?? 0) + 1)
 }
 
+const pushToMapList = <T>(map: Map<string, T[]>, key: string, value: T) => {
+  const list = map.get(key)
+  if (list) {
+    list.push(value)
+    return
+  }
+  map.set(key, [value])
+}
+
+const mapListToRecord = <T>(map: Map<string, T[]>) => {
+  const record: Record<string, T[]> = {}
+  map.forEach((value, key) => {
+    record[key] = value
+  })
+  return record
+}
+
+const lagBucketLabel = (lagHours: number) => {
+  if (lagHours < 0) return LAG_BUCKET_LABELS[0]
+  if (lagHours < 0.25) return LAG_BUCKET_LABELS[1]
+  if (lagHours < 1) return LAG_BUCKET_LABELS[2]
+  if (lagHours < 4) return LAG_BUCKET_LABELS[3]
+  if (lagHours < 8) return LAG_BUCKET_LABELS[4]
+  return LAG_BUCKET_LABELS[5]
+}
+
 type ScannerType = 'ilocs' | 'human' | 'unknown'
+
+type GroupedEvents = {
+  ilocs: RtlsEventDetail[]
+  human: RtlsEventDetail[]
+}
 
 export const analyzeRtlsDataset = (
   dataset: RtlsScanDataset,
@@ -176,28 +217,40 @@ export const analyzeRtlsDataset = (
         (left, right) => rows.timestampSerials[left] - rows.timestampSerials[right],
       )
 
+  const decodeCache = new Map<number, string>()
+  const decodeValue = (key: number) => {
+    const cached = decodeCache.get(key)
+    if (cached !== undefined) return cached
+    const decoded = decodeTokenKey(key, sharedLookup, rawValueLookup)
+    decodeCache.set(key, decoded)
+    return decoded
+  }
+
   const scannerTypeCache = new Map<string, ScannerType>()
   const stageCache = new Map<string, string>()
 
   const lastIlocsLocationByInv = new Map<number, number>()
   const lastHumanLocationByInv = new Map<number, number>()
-  const lastIlocsStageByInv = new Map<number, string>()
+  const lastIlocsEventByInv = new Map<number, RtlsEventDetail>()
 
-  const groupedEvents = new Map<string, { ilocs: number[]; human: number[] }>()
+  const groupedEvents = new Map<string, GroupedEvents>()
   const stageCounts = new Map<string, number>()
+  const stageEventsMap = new Map<string, RtlsEventDetail[]>()
   const transitionCounts = new Map<string, number>()
+  const transitionEventsMap = new Map<string, RtlsTransitionDetail[]>()
   const offPathTransitionCounts = new Map<string, number>()
+  const offPathTransitionEventsMap = new Map<string, RtlsTransitionDetail[]>()
 
-  let ilocsRoomChanges = 0
-  let humanRoomChanges = 0
+  const ilocsEvents: RtlsEventDetail[] = []
+  const humanEvents: RtlsEventDetail[] = []
 
   const getScannerType = (aliasUserKey: number, userKey: number) => {
     const cacheKey = `${aliasUserKey}|${userKey}`
     const cached = scannerTypeCache.get(cacheKey)
     if (cached) return cached
 
-    const alias = normalize(decodeTokenKey(aliasUserKey, sharedLookup, rawValueLookup))
-    const user = normalize(decodeTokenKey(userKey, sharedLookup, rawValueLookup))
+    const alias = normalize(decodeValue(aliasUserKey))
+    const user = normalize(decodeValue(userKey))
     const joined = `${alias} ${user}`.trim()
 
     if (!joined) {
@@ -219,13 +272,44 @@ export const analyzeRtlsDataset = (
     const cached = stageCache.get(cacheKey)
     if (cached) return cached
 
-    const location = decodeTokenKey(locationKey, sharedLookup, rawValueLookup)
-    const substate = decodeTokenKey(substateKey, sharedLookup, rawValueLookup)
-    const workflowRule = decodeTokenKey(workflowKey, sharedLookup, rawValueLookup)
-    const state = decodeTokenKey(stateKey, sharedLookup, rawValueLookup)
+    const location = decodeValue(locationKey)
+    const substate = decodeValue(substateKey)
+    const workflowRule = decodeValue(workflowKey)
+    const state = decodeValue(stateKey)
     const stage = classifyStage(location, substate, workflowRule, state)
     stageCache.set(cacheKey, stage)
     return stage
+  }
+
+  const buildEventDetail = (rowIndex: number, scannerType: 'ilocs' | 'human'): RtlsEventDetail => {
+    const invId = decodeValue(rows.invKeys[rowIndex]).trim() || `Inv-${rows.invKeys[rowIndex]}`
+    const invName = decodeValue(rows.invNameKeys[rowIndex]).trim() || 'Unknown Inv'
+    const location = decodeValue(rows.locationKeys[rowIndex]).trim() || 'Unknown Location'
+    const state = decodeValue(rows.stateKeys[rowIndex]).trim()
+    const substate = decodeValue(rows.substateKeys[rowIndex]).trim()
+    const workflowRule = decodeValue(rows.workflowKeys[rowIndex]).trim()
+    const aliasUser = decodeValue(rows.aliasUserKeys[rowIndex]).trim()
+    const userName = decodeValue(rows.userKeys[rowIndex]).trim()
+    const stage = getStage(
+      rows.locationKeys[rowIndex],
+      rows.substateKeys[rowIndex],
+      rows.workflowKeys[rowIndex],
+      rows.stateKeys[rowIndex],
+    )
+
+    return {
+      invId,
+      invName,
+      scannerType,
+      location,
+      stage,
+      state,
+      substate,
+      workflowRule,
+      aliasUser,
+      userName,
+      timestampSerial: rows.timestampSerials[rowIndex],
+    }
   }
 
   const rowAt = (position: number) => (orderedIndices ? orderedIndices[position] : position)
@@ -237,79 +321,114 @@ export const analyzeRtlsDataset = (
 
     const invKey = rows.invKeys[rowIndex]
     const locationKey = rows.locationKeys[rowIndex]
-    const timestampSerial = rows.timestampSerials[rowIndex]
-    const eventKey = `${invKey}|${locationKey}`
 
-    const group = groupedEvents.get(eventKey) ?? { ilocs: [], human: [] }
-    groupedEvents.set(eventKey, group)
+    const groupKey = `${invKey}|${locationKey}`
+    const group = groupedEvents.get(groupKey) ?? { ilocs: [], human: [] }
+    groupedEvents.set(groupKey, group)
 
     if (scannerType === 'ilocs') {
       const lastLocation = lastIlocsLocationByInv.get(invKey)
       if (lastLocation === locationKey) continue
-      lastIlocsLocationByInv.set(invKey, locationKey)
-      group.ilocs.push(timestampSerial)
-      ilocsRoomChanges += 1
 
-      const stage = getStage(
-        locationKey,
-        rows.substateKeys[rowIndex],
-        rows.workflowKeys[rowIndex],
-        rows.stateKeys[rowIndex],
-      )
-      incrementCount(stageCounts, stage)
-      const previousStage = lastIlocsStageByInv.get(invKey)
-      if (previousStage && previousStage !== stage) {
-        const transitionKey = `${previousStage}|${stage}`
+      const event = buildEventDetail(rowIndex, 'ilocs')
+      lastIlocsLocationByInv.set(invKey, locationKey)
+      group.ilocs.push(event)
+      ilocsEvents.push(event)
+
+      incrementCount(stageCounts, event.stage)
+      pushToMapList(stageEventsMap, event.stage, event)
+
+      const previousEvent = lastIlocsEventByInv.get(invKey)
+      if (previousEvent && previousEvent.stage !== event.stage) {
+        const transitionKey = `${previousEvent.stage}|${event.stage}`
+        const offPath = isOffPathTransition(previousEvent.stage, event.stage)
         incrementCount(transitionCounts, transitionKey)
-        if (isOffPathTransition(previousStage, stage)) {
+
+        const transitionDetail: RtlsTransitionDetail = {
+          invId: event.invId,
+          invName: event.invName,
+          fromStage: previousEvent.stage,
+          toStage: event.stage,
+          fromLocation: previousEvent.location,
+          toLocation: event.location,
+          fromTimestampSerial: previousEvent.timestampSerial,
+          toTimestampSerial: event.timestampSerial,
+          offPath,
+        }
+        pushToMapList(transitionEventsMap, transitionKey, transitionDetail)
+
+        if (offPath) {
           incrementCount(offPathTransitionCounts, transitionKey)
+          pushToMapList(offPathTransitionEventsMap, transitionKey, transitionDetail)
         }
       }
-      lastIlocsStageByInv.set(invKey, stage)
+
+      lastIlocsEventByInv.set(invKey, event)
       continue
     }
 
     const lastLocation = lastHumanLocationByInv.get(invKey)
     if (lastLocation === locationKey) continue
+
+    const event = buildEventDetail(rowIndex, 'human')
     lastHumanLocationByInv.set(invKey, locationKey)
-    group.human.push(timestampSerial)
-    humanRoomChanges += 1
+    group.human.push(event)
+    humanEvents.push(event)
   }
 
-  let matchedRoomChanges = 0
-  let unmatchedIlocsRoomChanges = 0
-  let unmatchedHumanRoomChanges = 0
+  const matchedEvents: RtlsMatchDetail[] = []
+  const unmatchedIlocsEvents: RtlsEventDetail[] = []
+  const unmatchedHumanEvents: RtlsEventDetail[] = []
   const lagValues: number[] = []
+  const lagBucketMatchesMap = new Map<string, RtlsMatchDetail[]>()
 
   groupedEvents.forEach((group) => {
     let ilocsCursor = 0
     let humanCursor = 0
 
     while (ilocsCursor < group.ilocs.length && humanCursor < group.human.length) {
-      const ilocsTime = group.ilocs[ilocsCursor]
-      const humanTime = group.human[humanCursor]
-      const lagHours = (humanTime - ilocsTime) * 24
+      const ilocsEvent = group.ilocs[ilocsCursor]
+      const humanEvent = group.human[humanCursor]
+      const lagHours = (humanEvent.timestampSerial - ilocsEvent.timestampSerial) * 24
 
       if (lagHours < -beforeHours) {
-        unmatchedHumanRoomChanges += 1
+        unmatchedHumanEvents.push(humanEvent)
         humanCursor += 1
         continue
       }
 
       if (lagHours > afterHours) {
-        unmatchedIlocsRoomChanges += 1
+        unmatchedIlocsEvents.push(ilocsEvent)
         ilocsCursor += 1
         continue
       }
 
-      matchedRoomChanges += 1
+      const matchDetail: RtlsMatchDetail = {
+        invId: ilocsEvent.invId,
+        invName: ilocsEvent.invName,
+        location: ilocsEvent.location,
+        stage: ilocsEvent.stage,
+        ilocsAliasUser: ilocsEvent.aliasUser,
+        humanAliasUser: humanEvent.aliasUser,
+        ilocsTimestampSerial: ilocsEvent.timestampSerial,
+        humanTimestampSerial: humanEvent.timestampSerial,
+        lagHours,
+      }
+
+      matchedEvents.push(matchDetail)
       lagValues.push(lagHours)
+      pushToMapList(lagBucketMatchesMap, lagBucketLabel(lagHours), matchDetail)
+
       ilocsCursor += 1
       humanCursor += 1
     }
 
-    unmatchedIlocsRoomChanges += group.ilocs.length - ilocsCursor
-    unmatchedHumanRoomChanges += group.human.length - humanCursor
+    for (; ilocsCursor < group.ilocs.length; ilocsCursor += 1) {
+      unmatchedIlocsEvents.push(group.ilocs[ilocsCursor])
+    }
+    for (; humanCursor < group.human.length; humanCursor += 1) {
+      unmatchedHumanEvents.push(group.human[humanCursor])
+    }
   })
 
   const sortedLags = [...lagValues].sort((left, right) => left - right)
@@ -318,38 +437,10 @@ export const analyzeRtlsDataset = (
       ? 0
       : sortedLags.reduce((accumulator, next) => accumulator + next, 0) / sortedLags.length
 
-  const lagBuckets = [
-    { label: 'Human Before ilocs', count: 0 },
-    { label: '0-15 Minutes', count: 0 },
-    { label: '15-60 Minutes', count: 0 },
-    { label: '1-4 Hours', count: 0 },
-    { label: '4-8 Hours', count: 0 },
-    { label: '8+ Hours', count: 0 },
-  ]
-
-  sortedLags.forEach((lagHours) => {
-    if (lagHours < 0) {
-      lagBuckets[0].count += 1
-      return
-    }
-    if (lagHours < 0.25) {
-      lagBuckets[1].count += 1
-      return
-    }
-    if (lagHours < 1) {
-      lagBuckets[2].count += 1
-      return
-    }
-    if (lagHours < 4) {
-      lagBuckets[3].count += 1
-      return
-    }
-    if (lagHours < 8) {
-      lagBuckets[4].count += 1
-      return
-    }
-    lagBuckets[5].count += 1
-  })
+  const lagBuckets = LAG_BUCKET_LABELS.map((label) => ({
+    label,
+    count: lagBucketMatchesMap.get(label)?.length ?? 0,
+  }))
 
   const stageSummaries = STAGE_ORDER.map((stage) => ({
     stage,
@@ -381,19 +472,33 @@ export const analyzeRtlsDataset = (
     })
     .sort((left, right) => right.count - left.count)
 
+  const drilldowns: RtlsDrilldowns = {
+    ilocsEvents,
+    humanEvents,
+    matchedEvents,
+    unmatchedIlocsEvents,
+    unmatchedHumanEvents,
+    lagBucketMatches: mapListToRecord(lagBucketMatchesMap),
+    stageEvents: mapListToRecord(stageEventsMap),
+    transitionEvents: mapListToRecord(transitionEventsMap),
+    offPathTransitionEvents: mapListToRecord(offPathTransitionEventsMap),
+    excludedInvNames: dataset.excludedInvNameSummaries,
+  }
+
   return {
     parsedRows: dataset.parsedRows,
     rawParsedRows: dataset.rawParsedRows,
     beaconFilterApplied: dataset.beaconFilterApplied,
     beaconedAssetsCount: dataset.beaconedAssetsCount,
     excludedNonBeaconRows: dataset.excludedNonBeaconRows,
-    ilocsRoomChanges,
-    humanRoomChanges,
-    matchedRoomChanges,
-    unmatchedIlocsRoomChanges,
-    unmatchedHumanRoomChanges,
-    ilocsMatchRate: round2(toPercent(matchedRoomChanges, ilocsRoomChanges)),
-    humanCoverageRate: round2(toPercent(matchedRoomChanges, humanRoomChanges)),
+    excludedInvNameSummaries: dataset.excludedInvNameSummaries,
+    ilocsRoomChanges: ilocsEvents.length,
+    humanRoomChanges: humanEvents.length,
+    matchedRoomChanges: matchedEvents.length,
+    unmatchedIlocsRoomChanges: unmatchedIlocsEvents.length,
+    unmatchedHumanRoomChanges: unmatchedHumanEvents.length,
+    ilocsMatchRate: round2(toPercent(matchedEvents.length, ilocsEvents.length)),
+    humanCoverageRate: round2(toPercent(matchedEvents.length, humanEvents.length)),
     lagHours: {
       mean: round2(meanLag),
       median: round2(quantile(sortedLags, 0.5)),
@@ -405,5 +510,6 @@ export const analyzeRtlsDataset = (
     stageSummaries,
     transitionSummaries,
     offPathTransitions,
+    drilldowns,
   }
 }

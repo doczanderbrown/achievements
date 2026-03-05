@@ -497,6 +497,7 @@ export const parseRtlsScanWorkbook = async (
     let excludedNonBeaconRows = 0
 
     const filteredInvKeys: number[] = []
+    const filteredInvNameKeys: number[] = []
     const filteredLocationKeys: number[] = []
     const filteredAliasUserKeys: number[] = []
     const filteredUserKeys: number[] = []
@@ -504,6 +505,7 @@ export const parseRtlsScanWorkbook = async (
     const filteredSubstateKeys: number[] = []
     const filteredWorkflowKeys: number[] = []
     const filteredTimestampSerials: number[] = []
+    const excludedInvNameCounts = new Map<string, number>()
 
     for (let index = 0; index < invKeys.length; index += 1) {
       if (beaconFilterApplied) {
@@ -512,11 +514,15 @@ export const parseRtlsScanWorkbook = async (
         )
         if (!normalizedInvName || !beaconedNameSet.has(normalizedInvName)) {
           excludedNonBeaconRows += 1
+          const rawInvName = decodeTokenKey(invNameKeys[index], sharedLookup, rawValueLookup).trim()
+          const invNameLabel = rawInvName || '(Blank Inv Name)'
+          excludedInvNameCounts.set(invNameLabel, (excludedInvNameCounts.get(invNameLabel) ?? 0) + 1)
           continue
         }
       }
 
       filteredInvKeys.push(invKeys[index])
+      filteredInvNameKeys.push(invNameKeys[index])
       filteredLocationKeys.push(locationKeys[index])
       filteredAliasUserKeys.push(aliasUserKeys[index])
       filteredUserKeys.push(userKeys[index])
@@ -532,9 +538,14 @@ export const parseRtlsScanWorkbook = async (
       rowsParsed: parsedRows,
     })
 
+    const excludedInvNameSummaries = Array.from(excludedInvNameCounts.entries())
+      .map(([invName, count]) => ({ invName, count }))
+      .sort((left, right) => right.count - left.count)
+
     return {
       rows: {
         invKeys: Int32Array.from(filteredInvKeys),
+        invNameKeys: Int32Array.from(filteredInvNameKeys),
         locationKeys: Int32Array.from(filteredLocationKeys),
         aliasUserKeys: Int32Array.from(filteredAliasUserKeys),
         userKeys: Int32Array.from(filteredUserKeys),
@@ -550,6 +561,7 @@ export const parseRtlsScanWorkbook = async (
       beaconFilterApplied,
       beaconedAssetsCount: beaconedNameSet.size,
       excludedNonBeaconRows,
+      excludedInvNameSummaries,
     }
   } finally {
     await zipReader.close()

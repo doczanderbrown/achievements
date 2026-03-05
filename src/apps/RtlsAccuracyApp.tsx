@@ -1,10 +1,33 @@
-import { useState } from 'react'
-import type { RtlsAnalysisConfig, RtlsAnalysisResult, RtlsParseProgress, RtlsScanDataset } from './rtlsAccuracy/types'
+import { useMemo, useState } from 'react'
+import type {
+  RtlsAnalysisConfig,
+  RtlsAnalysisResult,
+  RtlsEventDetail,
+  RtlsMatchDetail,
+  RtlsParseProgress,
+  RtlsScanDataset,
+  RtlsTransitionDetail,
+} from './rtlsAccuracy/types'
 import { analyzeRtlsDataset } from './rtlsAccuracy/utils/analyzeRtlsDataset'
 import { parseRtlsScanWorkbook } from './rtlsAccuracy/utils/parseRtlsScanWorkbook'
 
 type RtlsAccuracyAppProps = {
   onBack?: () => void
+}
+
+type DrilldownColumn = {
+  key: string
+  label: string
+  align?: 'left' | 'right'
+}
+
+type DrilldownRow = Record<string, string | number>
+
+type DrilldownState = {
+  title: string
+  subtitle?: string
+  columns: DrilldownColumn[]
+  rows: DrilldownRow[]
 }
 
 const DEFAULT_CONFIG: RtlsAnalysisConfig = {
@@ -13,10 +36,53 @@ const DEFAULT_CONFIG: RtlsAnalysisConfig = {
   humanAfterHours: 8,
 }
 
+const DRILLDOWN_PAGE_SIZE = 100
+const DAY_MS = 24 * 60 * 60 * 1000
+
 const formatPercent = (value: number) => `${value.toFixed(1)}%`
 const formatHours = (value: number) => `${value.toFixed(2)}h`
 
-const SummaryCard = ({ label, value, hint }: { label: string; value: string; hint?: string }) => {
+const formatDateTime = (serial: number) => {
+  if (!Number.isFinite(serial)) return '—'
+  const date = new Date((serial - 25569) * DAY_MS)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+const SummaryCard = ({
+  label,
+  value,
+  hint,
+  onClick,
+}: {
+  label: string
+  value: string
+  hint?: string
+  onClick?: () => void
+}) => {
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="rounded-2xl border border-ink/10 bg-white/90 p-4 text-left shadow-sm transition hover:border-brand/40 hover:shadow"
+      >
+        <div className="text-xs uppercase tracking-[0.14em] text-muted">{label}</div>
+        <div className="mt-2 text-2xl font-semibold text-ink">{value}</div>
+        {hint ? <div className="mt-1 text-xs text-muted">{hint}</div> : null}
+        <div className="mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand">
+          Click to drill down
+        </div>
+      </button>
+    )
+  }
+
   return (
     <article className="rounded-2xl border border-ink/10 bg-white/90 p-4 shadow-sm">
       <div className="text-xs uppercase tracking-[0.14em] text-muted">{label}</div>
@@ -24,6 +90,93 @@ const SummaryCard = ({ label, value, hint }: { label: string; value: string; hin
       {hint ? <div className="mt-1 text-xs text-muted">{hint}</div> : null}
     </article>
   )
+}
+
+const eventColumns: DrilldownColumn[] = [
+  { key: 'invName', label: 'Inv Name' },
+  { key: 'invId', label: 'InvID' },
+  { key: 'scannerType', label: 'Scanner' },
+  { key: 'stage', label: 'Stage' },
+  { key: 'location', label: 'Location' },
+  { key: 'aliasUser', label: 'Alias User' },
+  { key: 'userName', label: 'User Name' },
+  { key: 'timestamp', label: 'Timestamp' },
+]
+
+const matchColumns: DrilldownColumn[] = [
+  { key: 'invName', label: 'Inv Name' },
+  { key: 'invId', label: 'InvID' },
+  { key: 'stage', label: 'Stage' },
+  { key: 'location', label: 'Location' },
+  { key: 'ilocsAliasUser', label: 'ilocs User' },
+  { key: 'humanAliasUser', label: 'Human User' },
+  { key: 'ilocsTime', label: 'ilocs Time' },
+  { key: 'humanTime', label: 'Human Time' },
+  { key: 'lagHours', label: 'Lag (hrs)', align: 'right' },
+]
+
+const transitionColumns: DrilldownColumn[] = [
+  { key: 'invName', label: 'Inv Name' },
+  { key: 'invId', label: 'InvID' },
+  { key: 'fromStage', label: 'From Stage' },
+  { key: 'toStage', label: 'To Stage' },
+  { key: 'fromLocation', label: 'From Location' },
+  { key: 'toLocation', label: 'To Location' },
+  { key: 'fromTime', label: 'From Time' },
+  { key: 'toTime', label: 'To Time' },
+  { key: 'pathFlag', label: 'Path Flag' },
+]
+
+const excludedColumns: DrilldownColumn[] = [
+  { key: 'invName', label: 'Excluded Inv Name' },
+  { key: 'count', label: 'Rows', align: 'right' },
+]
+
+const toEventRows = (events: RtlsEventDetail[]): DrilldownRow[] => {
+  return events.map((event) => ({
+    invName: event.invName,
+    invId: event.invId,
+    scannerType: event.scannerType,
+    stage: event.stage,
+    location: event.location,
+    aliasUser: event.aliasUser || '—',
+    userName: event.userName || '—',
+    timestamp: formatDateTime(event.timestampSerial),
+  }))
+}
+
+const toMatchRows = (matches: RtlsMatchDetail[]): DrilldownRow[] => {
+  return matches
+    .slice()
+    .sort((left, right) => right.lagHours - left.lagHours)
+    .map((match) => ({
+      invName: match.invName,
+      invId: match.invId,
+      stage: match.stage,
+      location: match.location,
+      ilocsAliasUser: match.ilocsAliasUser || '—',
+      humanAliasUser: match.humanAliasUser || '—',
+      ilocsTime: formatDateTime(match.ilocsTimestampSerial),
+      humanTime: formatDateTime(match.humanTimestampSerial),
+      lagHours: formatHours(match.lagHours),
+    }))
+}
+
+const toTransitionRows = (transitions: RtlsTransitionDetail[]): DrilldownRow[] => {
+  return transitions
+    .slice()
+    .sort((left, right) => right.toTimestampSerial - left.toTimestampSerial)
+    .map((transition) => ({
+      invName: transition.invName,
+      invId: transition.invId,
+      fromStage: transition.fromStage,
+      toStage: transition.toStage,
+      fromLocation: transition.fromLocation,
+      toLocation: transition.toLocation,
+      fromTime: formatDateTime(transition.fromTimestampSerial),
+      toTime: formatDateTime(transition.toTimestampSerial),
+      pathFlag: transition.offPath ? 'Off-path' : 'Expected',
+    }))
 }
 
 const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
@@ -34,6 +187,9 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
   const [config, setConfig] = useState<RtlsAnalysisConfig>(DEFAULT_CONFIG)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<RtlsParseProgress | null>(null)
+  const [drilldown, setDrilldown] = useState<DrilldownState | null>(null)
+  const [drillSearch, setDrillSearch] = useState('')
+  const [drillPage, setDrillPage] = useState(1)
 
   const runAnalysis = async (sourceDataset: RtlsScanDataset, nextConfig: RtlsAnalysisConfig) => {
     setBusy(true)
@@ -48,12 +204,13 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
     setBusy(false)
   }
 
-  const handleUpload = async (file: File | null) => {
+  const handleFileUpload = async (file: File | null) => {
     if (!file) return
     setError(null)
     setFileName(file.name)
     setDataset(null)
     setAnalysis(null)
+    setDrilldown(null)
     setBusy(true)
 
     try {
@@ -77,6 +234,71 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
     setError(null)
     await runAnalysis(dataset, config)
   }
+
+  const openDrilldown = (next: DrilldownState) => {
+    setDrilldown(next)
+    setDrillSearch('')
+    setDrillPage(1)
+  }
+
+  const openEventDrilldown = (title: string, subtitle: string, rows: RtlsEventDetail[]) => {
+    openDrilldown({ title, subtitle, columns: eventColumns, rows: toEventRows(rows) })
+  }
+
+  const openMatchDrilldown = (title: string, subtitle: string, rows: RtlsMatchDetail[]) => {
+    openDrilldown({ title, subtitle, columns: matchColumns, rows: toMatchRows(rows) })
+  }
+
+  const openTransitionDrilldown = (
+    title: string,
+    subtitle: string,
+    rows: RtlsTransitionDetail[],
+  ) => {
+    openDrilldown({ title, subtitle, columns: transitionColumns, rows: toTransitionRows(rows) })
+  }
+
+  const openExcludedDrilldown = () => {
+    if (!analysis) return
+    const rows = analysis.drilldowns.excludedInvNames.map((entry) => ({
+      invName: entry.invName,
+      count: entry.count.toLocaleString(),
+    }))
+    openDrilldown({
+      title: 'Excluded Non-Beaconed Inventory',
+      subtitle: 'Rows removed because Inv Name was not found in beaconed assets sheet.',
+      columns: excludedColumns,
+      rows,
+    })
+  }
+
+  const openUnmatchedDrilldown = () => {
+    if (!analysis) return
+    const combined: RtlsEventDetail[] = [
+      ...analysis.drilldowns.unmatchedIlocsEvents,
+      ...analysis.drilldowns.unmatchedHumanEvents,
+    ]
+    openEventDrilldown(
+      'Unmatched Room Changes',
+      'Combined ilocs and human room-change events that did not match inside the selected window.',
+      combined,
+    )
+  }
+
+  const drillFilteredRows = useMemo(() => {
+    if (!drilldown) return []
+    const query = drillSearch.trim().toLowerCase()
+    if (!query) return drilldown.rows
+    return drilldown.rows.filter((row) => {
+      return Object.values(row).some((value) => String(value).toLowerCase().includes(query))
+    })
+  }, [drilldown, drillSearch])
+
+  const drillTotalPages = Math.max(1, Math.ceil(drillFilteredRows.length / DRILLDOWN_PAGE_SIZE))
+  const safeDrillPage = Math.min(drillPage, drillTotalPages)
+  const drillPageRows = drillFilteredRows.slice(
+    (safeDrillPage - 1) * DRILLDOWN_PAGE_SIZE,
+    safeDrillPage * DRILLDOWN_PAGE_SIZE,
+  )
 
   return (
     <div className="relative min-h-screen overflow-hidden">
@@ -114,7 +336,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                 type="file"
                 accept=".xlsx"
                 className="hidden"
-                onChange={(event) => handleUpload(event.target.files?.[0] ?? null)}
+                onChange={(event) => handleFileUpload(event.target.files?.[0] ?? null)}
               />
             </label>
           </div>
@@ -185,9 +407,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted">
-            <span className="rounded-full border border-ink/15 px-3 py-1">
-              File: {fileName || 'None'}
-            </span>
+            <span className="rounded-full border border-ink/15 px-3 py-1">File: {fileName || 'None'}</span>
             <span className="rounded-full border border-ink/15 px-3 py-1">
               Rows analyzed: {analysis?.parsedRows.toLocaleString() ?? 0}
             </span>
@@ -224,33 +444,96 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
               <SummaryCard
                 label="ilocs Room Changes"
                 value={analysis.ilocsRoomChanges.toLocaleString()}
+                onClick={() =>
+                  openEventDrilldown(
+                    'ilocs Room Changes',
+                    'All deduplicated ilocs room-change events.',
+                    analysis.drilldowns.ilocsEvents,
+                  )
+                }
               />
               <SummaryCard
                 label="Human Room Changes"
                 value={analysis.humanRoomChanges.toLocaleString()}
+                onClick={() =>
+                  openEventDrilldown(
+                    'Human Room Changes',
+                    'All deduplicated human room-change events.',
+                    analysis.drilldowns.humanEvents,
+                  )
+                }
               />
               <SummaryCard
                 label="Matched Room Changes"
                 value={analysis.matchedRoomChanges.toLocaleString()}
+                onClick={() =>
+                  openMatchDrilldown(
+                    'Matched Room Changes',
+                    'ilocs and human room changes paired inside configured lag window.',
+                    analysis.drilldowns.matchedEvents,
+                  )
+                }
               />
               <SummaryCard
                 label="Rows Excluded (Non-Beaconed)"
                 value={analysis.excludedNonBeaconRows.toLocaleString()}
-                hint={analysis.beaconFilterApplied ? 'Filtered using beaconed assets sheet.' : 'No beacon list applied.'}
+                hint={
+                  analysis.beaconFilterApplied
+                    ? 'Filtered using beaconed assets sheet.'
+                    : 'No beacon list applied.'
+                }
+                onClick={openExcludedDrilldown}
               />
-              <SummaryCard label="ilocs Match Rate" value={formatPercent(analysis.ilocsMatchRate)} />
+              <SummaryCard
+                label="ilocs Match Rate"
+                value={formatPercent(analysis.ilocsMatchRate)}
+                hint="Based on matched / ilocs room changes."
+                onClick={() =>
+                  openMatchDrilldown(
+                    'Match Rate Drilldown',
+                    'Underlying matched event pairs used in ilocs match rate.',
+                    analysis.drilldowns.matchedEvents,
+                  )
+                }
+              />
               <SummaryCard
                 label="Human Coverage Rate"
                 value={formatPercent(analysis.humanCoverageRate)}
+                hint="Based on matched / human room changes."
+                onClick={() =>
+                  openMatchDrilldown(
+                    'Coverage Rate Drilldown',
+                    'Underlying matched event pairs used in human coverage rate.',
+                    analysis.drilldowns.matchedEvents,
+                  )
+                }
               />
               <SummaryCard
                 label="Median Lag (Human - ilocs)"
                 value={formatHours(analysis.lagHours.median)}
+                onClick={() =>
+                  openMatchDrilldown(
+                    'Lag Drilldown',
+                    'Matched event pairs sorted by lag hours.',
+                    analysis.drilldowns.matchedEvents,
+                  )
+                }
               />
-              <SummaryCard label="P90 Lag" value={formatHours(analysis.lagHours.p90)} />
+              <SummaryCard
+                label="P90 Lag"
+                value={formatHours(analysis.lagHours.p90)}
+                onClick={() =>
+                  openMatchDrilldown(
+                    'P90 Lag Drilldown',
+                    'Matched event pairs sorted by lag hours.',
+                    analysis.drilldowns.matchedEvents,
+                  )
+                }
+              />
               <SummaryCard
                 label="Unmatched ilocs / Human"
                 value={`${analysis.unmatchedIlocsRoomChanges.toLocaleString()} / ${analysis.unmatchedHumanRoomChanges.toLocaleString()}`}
+                onClick={openUnmatchedDrilldown}
               />
             </section>
 
@@ -258,7 +541,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
               <article className="rounded-3xl border border-ink/10 bg-white/90 p-5 shadow-sm">
                 <h2 className="text-lg font-semibold text-ink">Lag Bucket Distribution</h2>
                 <p className="mt-1 text-xs text-muted">
-                  Based on matched events using the configured time window.
+                  Click any bucket to drill to the matched event pairs.
                 </p>
                 <div className="mt-4 overflow-x-auto">
                   <table className="min-w-full border-collapse text-sm">
@@ -269,14 +552,27 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                       </tr>
                     </thead>
                     <tbody>
-                      {analysis.lagBuckets.map((bucket) => (
-                        <tr key={bucket.label}>
-                          <td className="border-b border-ink/5 py-2 pr-4">{bucket.label}</td>
-                          <td className="border-b border-ink/5 py-2 text-right">
-                            {bucket.count.toLocaleString()}
-                          </td>
-                        </tr>
-                      ))}
+                      {analysis.lagBuckets.map((bucket) => {
+                        const drillRows = analysis.drilldowns.lagBucketMatches[bucket.label] ?? []
+                        return (
+                          <tr
+                            key={bucket.label}
+                            className="cursor-pointer hover:bg-brand/5"
+                            onClick={() =>
+                              openMatchDrilldown(
+                                `Lag Bucket: ${bucket.label}`,
+                                'Matched pairs contributing to this lag bucket.',
+                                drillRows,
+                              )
+                            }
+                          >
+                            <td className="border-b border-ink/5 py-2 pr-4">{bucket.label}</td>
+                            <td className="border-b border-ink/5 py-2 text-right">
+                              {bucket.count.toLocaleString()}
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -285,7 +581,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
               <article className="rounded-3xl border border-ink/10 bg-white/90 p-5 shadow-sm">
                 <h2 className="text-lg font-semibold text-ink">ilocs Stage Distribution</h2>
                 <p className="mt-1 text-xs text-muted">
-                  Stage buckets inferred from location, substate, workflow rule, and state.
+                  Click a stage to drill to all ilocs events classified into that stage.
                 </p>
                 <div className="mt-4 overflow-x-auto">
                   <table className="min-w-full border-collapse text-sm">
@@ -296,14 +592,27 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                       </tr>
                     </thead>
                     <tbody>
-                      {analysis.stageSummaries.map((stage) => (
-                        <tr key={stage.stage}>
-                          <td className="border-b border-ink/5 py-2 pr-4">{stage.stage}</td>
-                          <td className="border-b border-ink/5 py-2 text-right">
-                            {stage.count.toLocaleString()}
-                          </td>
-                        </tr>
-                      ))}
+                      {analysis.stageSummaries.map((stage) => {
+                        const drillRows = analysis.drilldowns.stageEvents[stage.stage] ?? []
+                        return (
+                          <tr
+                            key={stage.stage}
+                            className="cursor-pointer hover:bg-brand/5"
+                            onClick={() =>
+                              openEventDrilldown(
+                                `Stage: ${stage.stage}`,
+                                'ilocs events in this stage bucket.',
+                                drillRows,
+                              )
+                            }
+                          >
+                            <td className="border-b border-ink/5 py-2 pr-4">{stage.stage}</td>
+                            <td className="border-b border-ink/5 py-2 text-right">
+                              {stage.count.toLocaleString()}
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -314,7 +623,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
               <article className="rounded-3xl border border-ink/10 bg-white/90 p-5 shadow-sm">
                 <h2 className="text-lg font-semibold text-ink">Top ilocs Transitions</h2>
                 <p className="mt-1 text-xs text-muted">
-                  Most frequent stage-to-stage moves seen from ilocs room-change events.
+                  Click any transition row to inspect the underlying transition events.
                 </p>
                 <div className="mt-4 overflow-x-auto">
                   <table className="min-w-full border-collapse text-sm">
@@ -327,18 +636,35 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                       </tr>
                     </thead>
                     <tbody>
-                      {analysis.transitionSummaries.slice(0, 20).map((transition) => (
-                        <tr key={`${transition.from}-${transition.to}`}>
-                          <td className="border-b border-ink/5 py-2 pr-4">{transition.from}</td>
-                          <td className="border-b border-ink/5 py-2 pr-4">{transition.to}</td>
-                          <td className="border-b border-ink/5 py-2 pr-4">
-                            {transition.offPath ? 'Off-path' : 'Expected'}
-                          </td>
-                          <td className="border-b border-ink/5 py-2 text-right">
-                            {transition.count.toLocaleString()}
-                          </td>
-                        </tr>
-                      ))}
+                      {analysis.transitionSummaries.slice(0, 20).map((transition) => {
+                        const key = `${transition.from}|${transition.to}`
+                        const drillRows = analysis.drilldowns.transitionEvents[key] ?? []
+                        const clickable = drillRows.length > 0
+                        return (
+                          <tr
+                            key={key}
+                            className={clickable ? 'cursor-pointer hover:bg-brand/5' : ''}
+                            onClick={() =>
+                              clickable
+                                ? openTransitionDrilldown(
+                                    `Transition: ${transition.from} -> ${transition.to}`,
+                                    'ilocs stage-to-stage transition events for this lane.',
+                                    drillRows,
+                                  )
+                                : undefined
+                            }
+                          >
+                            <td className="border-b border-ink/5 py-2 pr-4">{transition.from}</td>
+                            <td className="border-b border-ink/5 py-2 pr-4">{transition.to}</td>
+                            <td className="border-b border-ink/5 py-2 pr-4">
+                              {transition.offPath ? 'Off-path' : 'Expected'}
+                            </td>
+                            <td className="border-b border-ink/5 py-2 text-right">
+                              {transition.count.toLocaleString()}
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -347,8 +673,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
               <article className="rounded-3xl border border-ink/10 bg-white/90 p-5 shadow-sm">
                 <h2 className="text-lg font-semibold text-ink">Top Off-Path Transitions</h2>
                 <p className="mt-1 text-xs text-muted">
-                  Stage jumps outside the expected cycle (Assembly → Sterilize → Transport →
-                  Storage → Case → Decon → Assembly).
+                  Click any row to drill into specific off-path transition events.
                 </p>
                 <div className="mt-4 overflow-x-auto">
                   <table className="min-w-full border-collapse text-sm">
@@ -360,15 +685,32 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                       </tr>
                     </thead>
                     <tbody>
-                      {analysis.offPathTransitions.slice(0, 20).map((transition) => (
-                        <tr key={`${transition.from}-${transition.to}`}>
-                          <td className="border-b border-ink/5 py-2 pr-4">{transition.from}</td>
-                          <td className="border-b border-ink/5 py-2 pr-4">{transition.to}</td>
-                          <td className="border-b border-ink/5 py-2 text-right">
-                            {transition.count.toLocaleString()}
-                          </td>
-                        </tr>
-                      ))}
+                      {analysis.offPathTransitions.slice(0, 20).map((transition) => {
+                        const key = `${transition.from}|${transition.to}`
+                        const drillRows = analysis.drilldowns.offPathTransitionEvents[key] ?? []
+                        const clickable = drillRows.length > 0
+                        return (
+                          <tr
+                            key={key}
+                            className={clickable ? 'cursor-pointer hover:bg-brand/5' : ''}
+                            onClick={() =>
+                              clickable
+                                ? openTransitionDrilldown(
+                                    `Off-Path Transition: ${transition.from} -> ${transition.to}`,
+                                    'Off-path ilocs transition events for this lane.',
+                                    drillRows,
+                                  )
+                                : undefined
+                            }
+                          >
+                            <td className="border-b border-ink/5 py-2 pr-4">{transition.from}</td>
+                            <td className="border-b border-ink/5 py-2 pr-4">{transition.to}</td>
+                            <td className="border-b border-ink/5 py-2 text-right">
+                              {transition.count.toLocaleString()}
+                            </td>
+                          </tr>
+                        )
+                      })}
                       {analysis.offPathTransitions.length === 0 ? (
                         <tr>
                           <td className="py-3 text-sm text-muted" colSpan={3}>
@@ -388,6 +730,107 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
           </section>
         )}
       </main>
+
+      {drilldown ? (
+        <div className="fixed inset-0 z-50 bg-ink/60 p-4 md:p-8" role="dialog" aria-modal="true">
+          <div className="mx-auto flex h-full w-full max-w-7xl flex-col rounded-3xl border border-ink/15 bg-white shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-ink/10 px-5 py-4">
+              <div>
+                <h3 className="text-lg font-semibold text-ink">{drilldown.title}</h3>
+                {drilldown.subtitle ? <p className="text-sm text-muted">{drilldown.subtitle}</p> : null}
+              </div>
+              <button
+                type="button"
+                className="rounded-full border border-ink/20 bg-white px-4 py-2 text-sm font-medium text-ink"
+                onClick={() => setDrilldown(null)}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 border-b border-ink/10 px-5 py-3 text-sm">
+              <input
+                type="text"
+                value={drillSearch}
+                onChange={(event) => {
+                  setDrillSearch(event.target.value)
+                  setDrillPage(1)
+                }}
+                placeholder="Search this drilldown..."
+                className="min-w-[280px] flex-1 rounded-xl border border-ink/20 px-3 py-2"
+              />
+              <span className="rounded-full border border-ink/15 px-3 py-1 text-xs text-muted">
+                Rows: {drillFilteredRows.length.toLocaleString()}
+              </span>
+            </div>
+
+            <div className="flex-1 overflow-auto px-5 py-4">
+              <table className="min-w-full border-collapse text-sm">
+                <thead>
+                  <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
+                    {drilldown.columns.map((column) => (
+                      <th
+                        key={column.key}
+                        className={`border-b border-ink/10 py-2 pr-4 ${column.align === 'right' ? 'text-right' : ''}`}
+                      >
+                        {column.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {drillPageRows.map((row, index) => (
+                    <tr key={`${safeDrillPage}-${index}`}>
+                      {drilldown.columns.map((column) => (
+                        <td
+                          key={`${safeDrillPage}-${index}-${column.key}`}
+                          className={`border-b border-ink/5 py-2 pr-4 ${column.align === 'right' ? 'text-right' : ''}`}
+                        >
+                          {String(row[column.key] ?? '')}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  {drillPageRows.length === 0 ? (
+                    <tr>
+                      <td
+                        className="py-4 text-sm text-muted"
+                        colSpan={Math.max(1, drilldown.columns.length)}
+                      >
+                        No rows match the current search.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-ink/10 px-5 py-3 text-sm">
+              <span className="text-muted">
+                Page {safeDrillPage} of {drillTotalPages}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={safeDrillPage <= 1}
+                  onClick={() => setDrillPage(Math.max(1, safeDrillPage - 1))}
+                  className="rounded-full border border-ink/20 bg-white px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  disabled={safeDrillPage >= drillTotalPages}
+                  onClick={() => setDrillPage(Math.min(drillTotalPages, safeDrillPage + 1))}
+                  className="rounded-full border border-ink/20 bg-white px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
