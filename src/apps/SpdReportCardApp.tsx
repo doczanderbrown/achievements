@@ -458,19 +458,104 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                   </div>
                 </div>
                 <div className="rounded-2xl border border-accent/20 bg-white/70 p-4 text-sm text-muted">
-                  <div className="font-semibold text-ink">How the engine works</div>
-                  <ul className="mt-2 list-disc space-y-1 pl-4">
-                    <li>Peer comparisons use raw pillar counts plus defect rate.</li>
-                    <li>
-                      Productivity is standardized by per-hour pillar rates when Hours Worked is
-                      provided.
-                    </li>
-                    <li>
-                      Quality blends defect rate with missing instruments rate (missing per
-                      assembled instruments), and Versatility reflects above-median pillars.
-                    </li>
-                    <li>Archetypes pick the dominant pillar; utility status rewards multi-pillar strength.</li>
-                  </ul>
+                  <details>
+                    <summary className="cursor-pointer font-semibold text-ink">
+                      How the engine works
+                    </summary>
+                    <div className="mt-2 space-y-3">
+                      <p>
+                        Scores are peer-relative for the uploaded reporting period. Each user is
+                        compared to others in that same file, not to a fixed external benchmark.
+                      </p>
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">
+                          Pillar totals
+                        </div>
+                        <ul className="mt-1 list-disc space-y-1 pl-4">
+                          <li>
+                            Decontamination Total = Decon Scans + Sink Inst + Sink Trays
+                          </li>
+                          <li>
+                            Assembly Total = Assembled Inst + Assembled Trays + Assembled Packs
+                          </li>
+                          <li>
+                            Sterilization Total = Items Sterilized + Sterilizer Loads + Deliver
+                            Scans
+                          </li>
+                        </ul>
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">
+                          Normalization fields
+                        </div>
+                        <ul className="mt-1 list-disc space-y-1 pl-4">
+                          <li>
+                            Total Hours Worked = Hours Worked + (Activity Time (Mins) / 60)
+                          </li>
+                          <li>
+                            Units of Service = (Sink Inst x 0.5) + Assembled Inst
+                          </li>
+                          <li>
+                            Worked Hours per Unit = Total Hours Worked / max(Units of Service, 1)
+                          </li>
+                          <li>
+                            Missing Instrument Rate = Assembly Missing Inst / max(Assembled Inst,
+                            1)
+                          </li>
+                        </ul>
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">
+                          Percentile logic
+                        </div>
+                        <ul className="mt-1 list-disc space-y-1 pl-4">
+                          <li>
+                            Percentiles are based on cohort rank and tie-adjusted midpoints.
+                          </li>
+                          <li>
+                            Higher-is-better metrics rank upward; lower-is-better metrics (Defect
+                            Rate, Missing Instr Rate, Worked Hours/Unit) are inverted so lower
+                            values score better.
+                          </li>
+                        </ul>
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">
+                          Core score formulas
+                        </div>
+                        <ul className="mt-1 list-disc space-y-1 pl-4">
+                          <li>
+                            Productivity (hours provided) = average percentile of Decon/Hour,
+                            Assembly/Hour, Sterilize/Hour.
+                          </li>
+                          <li>
+                            Productivity (hours missing) = average percentile of pillar totals.
+                          </li>
+                          <li>
+                            Quality = (Defect Rate Percentile x 0.70) + (Missing Instrument Rate
+                            Percentile x 0.30).
+                          </li>
+                          <li>
+                            Versatility = (number of pillars at/above median / 3) x 100.
+                          </li>
+                        </ul>
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted">
+                          Overall score
+                        </div>
+                        <ul className="mt-1 list-disc space-y-1 pl-4">
+                          <li>
+                            Overall Processing Score = Productivity Percentile + Quality Percentile
+                            (0-200).
+                          </li>
+                          <li>
+                            Card percentile display = Overall Processing Score / 2.
+                          </li>
+                        </ul>
+                      </div>
+                    </div>
+                  </details>
                 </div>
                 <div className="rounded-2xl border border-accent/20 bg-white/70 p-4 text-sm text-muted">
                   <details>
