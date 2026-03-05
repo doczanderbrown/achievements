@@ -18,6 +18,10 @@ export type RtlsScanDataset = {
   sharedLookup: Map<number, string>
   rawValueLookup: string[]
   parsedRows: number
+  rawParsedRows: number
+  beaconFilterApplied: boolean
+  beaconedAssetsCount: number
+  excludedNonBeaconRows: number
 }
 
 export type RtlsAnalysisConfig = {
@@ -45,6 +49,10 @@ export type RtlsTransitionSummary = {
 
 export type RtlsAnalysisResult = {
   parsedRows: number
+  rawParsedRows: number
+  beaconFilterApplied: boolean
+  beaconedAssetsCount: number
+  excludedNonBeaconRows: number
   ilocsRoomChanges: number
   humanRoomChanges: number
   matchedRoomChanges: number

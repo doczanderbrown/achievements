@@ -383,6 +383,10 @@ export const analyzeRtlsDataset = (
 
   return {
     parsedRows: dataset.parsedRows,
+    rawParsedRows: dataset.rawParsedRows,
+    beaconFilterApplied: dataset.beaconFilterApplied,
+    beaconedAssetsCount: dataset.beaconedAssetsCount,
+    excludedNonBeaconRows: dataset.excludedNonBeaconRows,
     ilocsRoomChanges,
     humanRoomChanges,
     matchedRoomChanges,

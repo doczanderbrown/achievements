@@ -189,8 +189,21 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
               File: {fileName || 'None'}
             </span>
             <span className="rounded-full border border-ink/15 px-3 py-1">
-              Rows parsed: {analysis?.parsedRows.toLocaleString() ?? 0}
+              Rows analyzed: {analysis?.parsedRows.toLocaleString() ?? 0}
             </span>
+            {analysis?.beaconFilterApplied ? (
+              <>
+                <span className="rounded-full border border-ink/15 px-3 py-1">
+                  Rows before beacon filter: {analysis.rawParsedRows.toLocaleString()}
+                </span>
+                <span className="rounded-full border border-ink/15 px-3 py-1">
+                  Beaconed assets: {analysis.beaconedAssetsCount.toLocaleString()}
+                </span>
+                <span className="rounded-full border border-ink/15 px-3 py-1">
+                  Excluded (non-beaconed): {analysis.excludedNonBeaconRows.toLocaleString()}
+                </span>
+              </>
+            ) : null}
             {progress ? (
               <span className="rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-ink">
                 {progress.message}
@@ -219,6 +232,11 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
               <SummaryCard
                 label="Matched Room Changes"
                 value={analysis.matchedRoomChanges.toLocaleString()}
+              />
+              <SummaryCard
+                label="Rows Excluded (Non-Beaconed)"
+                value={analysis.excludedNonBeaconRows.toLocaleString()}
+                hint={analysis.beaconFilterApplied ? 'Filtered using beaconed assets sheet.' : 'No beacon list applied.'}
               />
               <SummaryCard label="ilocs Match Rate" value={formatPercent(analysis.ilocsMatchRate)} />
               <SummaryCard

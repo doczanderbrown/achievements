@@ -23,7 +23,8 @@ type SheetRef = {
 const WORKBOOK_ENTRY = 'xl/workbook.xml'
 const WORKBOOK_RELS_ENTRY = 'xl/_rels/workbook.xml.rels'
 const SHARED_STRINGS_ENTRY = 'xl/sharedStrings.xml'
-const TARGET_COLS = new Set(['B', 'J', 'K', 'M', 'O', 'P', 'R', 'S', 'AG', 'AH', 'AI'])
+const TARGET_COLS = new Set(['B', 'J', 'K', 'M', 'O', 'P', 'R', 'S', 'AA', 'AG', 'AH', 'AI'])
+const BEACON_TARGET_COLS = new Set(['B'])
 
 const ROW_CLOSE = '</row>'
 const SHARED_STRING_CLOSE = '</si>'
@@ -248,7 +249,7 @@ const normalizeEntryPath = (target: string) => {
   return `xl/${clean}`
 }
 
-const resolveSheetEntry = async (fileEntriesByPath: Map<string, FileEntry>) => {
+const resolveSheetEntries = async (fileEntriesByPath: Map<string, FileEntry>) => {
   const workbookEntry = fileEntriesByPath.get(WORKBOOK_ENTRY)
   const relsEntry = fileEntriesByPath.get(WORKBOOK_RELS_ENTRY)
   if (!workbookEntry || !relsEntry) return null
@@ -280,13 +281,27 @@ const resolveSheetEntry = async (fileEntriesByPath: Map<string, FileEntry>) => {
 
   if (sheets.length === 0) return null
 
-  const preferred = ['scan', 'analytic', 'history']
-  for (const needle of preferred) {
-    const found = sheets.find((sheet) => sheet.name.toLowerCase().includes(needle))
-    if (found) return found.entry
+  const findByNeedles = (needles: string[]) => {
+    for (const needle of needles) {
+      const found = sheets.find((sheet) => sheet.name.toLowerCase().includes(needle))
+      if (found) return found.entry
+    }
+    return null
   }
 
-  return sheets[0].entry
+  const scanEntry =
+    findByNeedles(['scan', 'analytic', 'history']) ??
+    findByNeedles(['sheet1']) ??
+    sheets[0].entry
+  const beaconEntry = findByNeedles(['beacon'])
+
+  return {
+    scanEntry,
+    beaconEntry:
+      beaconEntry && beaconEntry !== scanEntry && fileEntriesByPath.has(beaconEntry)
+        ? beaconEntry
+        : null,
+  }
 }
 
 const parseExcelSerial = (...candidates: Array<string | undefined>) => {
@@ -304,6 +319,8 @@ const parseExcelSerial = (...candidates: Array<string | undefined>) => {
   }
   return null
 }
+
+const normalizeName = (value: string) => value.trim().toLowerCase()
 
 const parseTokenKey = (
   cell: ParsedCell | undefined,
@@ -352,13 +369,13 @@ export const parseRtlsScanWorkbook = async (
   try {
     const entries = await zipReader.getEntries()
     const fileEntriesByPath = toFileEntriesByPath(entries)
-    const sheetEntryPath = await resolveSheetEntry(fileEntriesByPath)
-    if (!sheetEntryPath) {
+    const sheetEntries = await resolveSheetEntries(fileEntriesByPath)
+    if (!sheetEntries) {
       throw new Error('Workbook format not recognized. No worksheet could be located.')
     }
 
-    const sheetEntry = fileEntriesByPath.get(sheetEntryPath)
-    if (!sheetEntry) {
+    const scanSheetEntry = fileEntriesByPath.get(sheetEntries.scanEntry)
+    if (!scanSheetEntry) {
       throw new Error('Workbook format not recognized. Unable to find worksheet data entry.')
     }
 
@@ -367,6 +384,7 @@ export const parseRtlsScanWorkbook = async (
     const rawValueToId = new Map<string, number>()
 
     const invKeys: number[] = []
+    const invNameKeys: number[] = []
     const locationKeys: number[] = []
     const aliasUserKeys: number[] = []
     const userKeys: number[] = []
@@ -374,6 +392,7 @@ export const parseRtlsScanWorkbook = async (
     const substateKeys: number[] = []
     const workflowKeys: number[] = []
     const timestampSerials: number[] = []
+    const beaconInvNameKeys: number[] = []
 
     let parsedRows = 0
 
@@ -403,6 +422,9 @@ export const parseRtlsScanWorkbook = async (
       if (timestampSerial === null) return
 
       invKeys.push(invKey)
+      invNameKeys.push(
+        parseTokenKey(cells.AA, neededSharedIndices, rawValueToId, rawValueLookup),
+      )
       locationKeys.push(locationKey)
       aliasUserKeys.push(
         parseTokenKey(cells.R, neededSharedIndices, rawValueToId, rawValueLookup),
@@ -415,7 +437,31 @@ export const parseRtlsScanWorkbook = async (
     })
 
     onProgress?.({ phase: 'sheets', message: 'Reading worksheet rows...', rowsParsed: 0 })
-    await streamEntry(sheetEntry, worksheetParser.onChunk)
+    await streamEntry(scanSheetEntry, worksheetParser.onChunk)
+
+    if (sheetEntries.beaconEntry) {
+      const beaconSheetEntry = fileEntriesByPath.get(sheetEntries.beaconEntry)
+      if (beaconSheetEntry) {
+        onProgress?.({
+          phase: 'sheets',
+          message: 'Reading beaconed assets sheet...',
+          rowsParsed: parsedRows,
+        })
+        const beaconParser = createWorksheetRowParser(BEACON_TARGET_COLS, (rowNumber, cells) => {
+          if (rowNumber === 1) return
+          const invNameKey = parseTokenKey(
+            cells.B,
+            neededSharedIndices,
+            rawValueToId,
+            rawValueLookup,
+          )
+          if (invNameKey !== 0) {
+            beaconInvNameKeys.push(invNameKey)
+          }
+        })
+        await streamEntry(beaconSheetEntry, beaconParser.onChunk)
+      }
+    }
 
     if (parsedRows === 0 || invKeys.length === 0) {
       throw new Error('No scan rows were parsed. Please verify this is a scan-history export.')
@@ -438,6 +484,48 @@ export const parseRtlsScanWorkbook = async (
       await streamEntry(sharedStringsEntry, sharedStringsParser.onChunk)
     }
 
+    const beaconedNameSet = new Set<string>()
+    for (const invNameKey of beaconInvNameKeys) {
+      const normalized = normalizeName(decodeTokenKey(invNameKey, sharedLookup, rawValueLookup))
+      if (normalized) {
+        beaconedNameSet.add(normalized)
+      }
+    }
+
+    const rawParsedRows = invKeys.length
+    const beaconFilterApplied = beaconedNameSet.size > 0
+    let excludedNonBeaconRows = 0
+
+    const filteredInvKeys: number[] = []
+    const filteredLocationKeys: number[] = []
+    const filteredAliasUserKeys: number[] = []
+    const filteredUserKeys: number[] = []
+    const filteredStateKeys: number[] = []
+    const filteredSubstateKeys: number[] = []
+    const filteredWorkflowKeys: number[] = []
+    const filteredTimestampSerials: number[] = []
+
+    for (let index = 0; index < invKeys.length; index += 1) {
+      if (beaconFilterApplied) {
+        const normalizedInvName = normalizeName(
+          decodeTokenKey(invNameKeys[index], sharedLookup, rawValueLookup),
+        )
+        if (!normalizedInvName || !beaconedNameSet.has(normalizedInvName)) {
+          excludedNonBeaconRows += 1
+          continue
+        }
+      }
+
+      filteredInvKeys.push(invKeys[index])
+      filteredLocationKeys.push(locationKeys[index])
+      filteredAliasUserKeys.push(aliasUserKeys[index])
+      filteredUserKeys.push(userKeys[index])
+      filteredStateKeys.push(stateKeys[index])
+      filteredSubstateKeys.push(substateKeys[index])
+      filteredWorkflowKeys.push(workflowKeys[index])
+      filteredTimestampSerials.push(timestampSerials[index])
+    }
+
     onProgress?.({
       phase: 'complete',
       message: 'Workbook parse complete.',
@@ -446,18 +534,22 @@ export const parseRtlsScanWorkbook = async (
 
     return {
       rows: {
-        invKeys: Int32Array.from(invKeys),
-        locationKeys: Int32Array.from(locationKeys),
-        aliasUserKeys: Int32Array.from(aliasUserKeys),
-        userKeys: Int32Array.from(userKeys),
-        stateKeys: Int32Array.from(stateKeys),
-        substateKeys: Int32Array.from(substateKeys),
-        workflowKeys: Int32Array.from(workflowKeys),
-        timestampSerials: Float64Array.from(timestampSerials),
+        invKeys: Int32Array.from(filteredInvKeys),
+        locationKeys: Int32Array.from(filteredLocationKeys),
+        aliasUserKeys: Int32Array.from(filteredAliasUserKeys),
+        userKeys: Int32Array.from(filteredUserKeys),
+        stateKeys: Int32Array.from(filteredStateKeys),
+        substateKeys: Int32Array.from(filteredSubstateKeys),
+        workflowKeys: Int32Array.from(filteredWorkflowKeys),
+        timestampSerials: Float64Array.from(filteredTimestampSerials),
       },
       sharedLookup,
       rawValueLookup,
-      parsedRows,
+      parsedRows: filteredInvKeys.length,
+      rawParsedRows,
+      beaconFilterApplied,
+      beaconedAssetsCount: beaconedNameSet.size,
+      excludedNonBeaconRows,
     }
   } finally {
     await zipReader.close()
