@@ -224,7 +224,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
       setHoursWorkedAvailable(hasHoursWorked)
       setReportingPeriod(extractReportingPeriod(file.name))
       setSelectedIds(new Set())
-    } catch (err) {
+    } catch {
       setError('Unable to read the spreadsheet. Please confirm it is a valid .xlsx file.')
       setReport(null)
       setHoursWorkedAvailable(true)
@@ -509,6 +509,10 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
     () => (report ? report.users.filter((user) => selectedIds.has(getUserKey(user))) : []),
     [report, selectedIds],
   )
+  const productivityExcludedCount = useMemo(
+    () => (report ? report.users.filter((user) => !user.productivityRanked).length : 0),
+    [report],
+  )
 
   const selectedCount = selectedUsers.length
   const pdfProgressText =
@@ -542,7 +546,11 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
 
   const leaderboardRows = useMemo(() => {
     if (!report) return []
-    const rows = users.map((user) => ({
+    const sourceUsers =
+      activeLeaderboard.key === 'productivity'
+        ? users.filter((user) => user.productivityRanked)
+        : users
+    const rows = sourceUsers.map((user) => ({
       user,
       name: anonymize ? user.techLabel : user.name,
       value: activeLeaderboard.getValue(user),
@@ -701,6 +709,10 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                             Higher-is-better metrics rank upward; lower-is-better metrics (Defect
                             Rate, Missing Instr Rate, Worked Hours/Unit) are inverted so lower
                             values score better.
+                          </li>
+                          <li>
+                            When Hours Worked is present, users with missing/zero hours are
+                            excluded from hours-based productivity peer ranking.
                           </li>
                         </ul>
                       </div>
@@ -919,6 +931,13 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                   of per-hour rates.
                 </span>
               ) : null}
+              {report && hoursWorkedAvailable && productivityExcludedCount > 0 ? (
+                <span className="rounded-full border border-warning/40 bg-warning/10 px-3 py-1 text-xs font-medium text-ink">
+                  {productivityExcludedCount}{' '}
+                  {productivityExcludedCount === 1 ? 'user is' : 'users are'} excluded from
+                  productivity peer ranking due to missing/zero Hours Worked.
+                </span>
+              ) : null}
             </div>
             {report ? (
               <div className="flex flex-wrap gap-2">
@@ -1114,6 +1133,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                 </thead>
                 <tbody>
                   {leaderboardRows.map((row, index) => {
+                    const hasNoHoursWorked = hoursWorkedAvailable && row.user.hoursWorked <= 0
                     const valueDisplay =
                       activeLeaderboard.type === 'metric'
                         ? formatMetricValue(
@@ -1126,9 +1146,23 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                     const percentileDisplay =
                       row.percentile !== null ? formatOrdinal(row.percentile) : '—'
                     return (
-                      <tr key={getUserKey(row.user)} className="border-t border-ink/10">
+                      <tr
+                        key={getUserKey(row.user)}
+                        className={`border-t ${
+                          hasNoHoursWorked
+                            ? 'border-warning/30 bg-warning/10'
+                            : 'border-ink/10'
+                        }`}
+                      >
                         <td className="py-2 pr-3 text-muted">{index + 1}</td>
-                        <td className="py-2 pr-3 font-medium text-ink">{row.name}</td>
+                        <td className="py-2 pr-3 font-medium text-ink">
+                          {row.name}
+                          {hasNoHoursWorked ? (
+                            <span className="ml-2 rounded-full border border-warning/40 bg-warning/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-warning">
+                              No hours
+                            </span>
+                          ) : null}
+                        </td>
                         <td className="py-2 pr-3 text-ink">{valueDisplay}</td>
                         <td className="py-2 pr-3 text-muted">{percentileDisplay}</td>
                       </tr>

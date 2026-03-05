@@ -162,6 +162,7 @@ const ReportCard = ({
 }: ReportCardProps) => {
   const displayName = anonymize ? user.techLabel : user.name
   const deconLabel = shortPillarLabels ? 'Decon' : 'Decontamination'
+  const hasNoHoursWorked = hoursWorkedAvailable && user.hoursWorked <= 0
 
   const comparisonItems = DEFAULT_METRICS.map((metric) => {
     const value = user.metrics[metric.key]
@@ -225,7 +226,9 @@ const ReportCard = ({
 
   return (
     <article
-      className={`relative flex h-full flex-col gap-5 overflow-hidden rounded-3xl border border-brand/20 bg-panel/95 p-6 shadow-lg ${interactiveClasses} ${className}`}
+      className={`relative flex h-full flex-col gap-5 overflow-hidden rounded-3xl border p-6 shadow-lg ${
+        hasNoHoursWorked ? 'border-warning/50 bg-warning/10' : 'border-brand/20 bg-panel/95'
+      } ${interactiveClasses} ${className}`}
       onClick={onClick}
       onKeyDown={(event) => {
         if (!interactive) return
@@ -237,7 +240,13 @@ const ReportCard = ({
       role={interactive ? 'button' : undefined}
       tabIndex={interactive ? 0 : undefined}
     >
-      <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-brand via-accent to-brand/60" />
+      <div
+        className={`absolute inset-x-0 top-0 h-1.5 ${
+          hasNoHoursWorked
+            ? 'bg-gradient-to-r from-warning via-warning/80 to-warning/50'
+            : 'bg-gradient-to-r from-brand via-accent to-brand/60'
+        }`}
+      />
       <div className="flex flex-wrap items-start justify-between gap-3 pt-3">
         <div>
           <div className="text-xs uppercase tracking-[0.2em] text-muted">Report Card</div>
@@ -247,6 +256,13 @@ const ReportCard = ({
               ? `Hours Worked: ${user.hoursWorked.toFixed(1)}`
               : 'Hours Worked not found'}
           </div>
+          {hasNoHoursWorked ? (
+            <div className="mt-1 text-xs font-medium text-warning">
+              {user.productivityRanked
+                ? 'Hours Worked is 0 or missing for this user.'
+                : 'Excluded from productivity peer ranking (Hours Worked missing or 0).'}
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-2 text-sm font-medium text-ink">
           <span className="text-lg">{user.archetype.icon}</span>
@@ -337,23 +353,34 @@ const ReportCard = ({
               Why your productivity score looks this way
             </summary>
             <div className="mt-2 space-y-2">
-              <div>
-                Your productivity is driven mostly by{' '}
-                <span className="font-semibold text-ink">
-                  {productivityDrivers[0].value.toFixed(0)}% {productivityDrivers[0].label}
-                </span>{' '}
-                and{' '}
-                <span className="font-semibold text-ink">
-                  {productivityDrivers[1].value.toFixed(0)}% {productivityDrivers[1].label}
-                </span>
-                , with{' '}
-                <span className="font-semibold text-ink">
-                  {productivityDrivers[2].value.toFixed(0)}% {productivityDrivers[2].label}
-                </span>{' '}
-                contributing as well.
-              </div>
+              {user.productivityDrivers.basis === 'excluded' ? (
+                <div>
+                  This user is excluded from productivity peer ranking because Hours Worked is
+                  missing or 0.
+                </div>
+              ) : (
+                <div>
+                  Your productivity is driven mostly by{' '}
+                  <span className="font-semibold text-ink">
+                    {productivityDrivers[0].value.toFixed(0)}% {productivityDrivers[0].label}
+                  </span>{' '}
+                  and{' '}
+                  <span className="font-semibold text-ink">
+                    {productivityDrivers[1].value.toFixed(0)}% {productivityDrivers[1].label}
+                  </span>
+                  , with{' '}
+                  <span className="font-semibold text-ink">
+                    {productivityDrivers[2].value.toFixed(0)}% {productivityDrivers[2].label}
+                  </span>{' '}
+                  contributing as well.
+                </div>
+              )}
               <div className="text-xs text-muted">
-                Based on {user.productivityDrivers.basis === 'rates' ? 'per-hour pillar rates' : 'pillar totals'}.
+                {user.productivityDrivers.basis === 'rates'
+                  ? 'Based on per-hour pillar rates.'
+                  : user.productivityDrivers.basis === 'totals'
+                    ? 'Based on pillar totals.'
+                    : 'No productivity percentile is assigned until Hours Worked is provided.'}
               </div>
             </div>
           </details>

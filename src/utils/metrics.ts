@@ -170,11 +170,12 @@ export type UserRecord = {
   name: string
   techLabel: string
   hoursWorked: number
+  productivityRanked: boolean
   productivityDrivers: {
     decon: number
     assembly: number
     sterilize: number
-    basis: 'rates' | 'totals'
+    basis: 'rates' | 'totals' | 'excluded'
   }
   metrics: Record<MetricKey, number>
   percentiles: Record<MetricKey, number>
@@ -543,28 +544,58 @@ export const buildReport = (
   const sortedMetricValues = buildSortedValues(metricValues, METRIC_KEYS)
   const sortedPillarValues = buildSortedValues(pillarTotalsList, PILLAR_KEYS)
 
+  const zeroPillarPercentiles: PillarTotals = {
+    decon: 0,
+    assembly: 0,
+    sterilize: 0,
+  }
   const pillarRatesByUser = baseUsers.map((user) =>
     buildPillarRates(user.pillarTotals, user.hoursWorked),
   )
-  const sortedPillarRateValues = buildSortedValues(pillarRatesByUser, PILLAR_KEYS)
+  const rateEligibleIndexes = hoursWorkedAvailable
+    ? baseUsers
+        .map((user, index) => (user.hoursWorked > 0 ? index : -1))
+        .filter((index) => index >= 0)
+    : []
+  const rateProductivityEnabled = hoursWorkedAvailable && rateEligibleIndexes.length > 0
+  const sortedPillarRateValues =
+    rateProductivityEnabled
+      ? buildSortedValues(
+          rateEligibleIndexes.map((index) => pillarRatesByUser[index]),
+          PILLAR_KEYS,
+        )
+      : null
 
   const usersWithPercentiles = baseUsers.map((user, index) => {
     const percentiles = buildPercentiles(user.metrics, sortedMetricValues, METRIC_HIGHER_BETTER)
     const pillarPercentiles = buildPercentiles(user.pillarTotals, sortedPillarValues, PILLAR_HIGHER_BETTER)
-    const pillarRatePercentiles = buildPercentiles(
-      pillarRatesByUser[index],
-      sortedPillarRateValues,
-      PILLAR_HIGHER_BETTER,
-    )
+    const productivityRanked = !rateProductivityEnabled || user.hoursWorked > 0
+    const pillarRatePercentiles =
+      rateProductivityEnabled && productivityRanked && sortedPillarRateValues
+        ? buildPercentiles(
+            pillarRatesByUser[index],
+            sortedPillarRateValues,
+            PILLAR_HIGHER_BETTER,
+          )
+        : zeroPillarPercentiles
 
-    const driverBasis = hoursWorkedAvailable ? 'rates' : 'totals'
-    const driverValues = hoursWorkedAvailable ? pillarRatePercentiles : pillarPercentiles
+    const driverBasis: 'rates' | 'totals' | 'excluded' = rateProductivityEnabled
+      ? productivityRanked
+        ? 'rates'
+        : 'excluded'
+      : 'totals'
+    const driverValues =
+      driverBasis === 'rates'
+        ? pillarRatePercentiles
+        : driverBasis === 'totals'
+          ? pillarPercentiles
+          : zeroPillarPercentiles
     const driverSum = driverValues.decon + driverValues.assembly + driverValues.sterilize
     const productivityDrivers = {
       decon: driverSum ? (driverValues.decon / driverSum) * 100 : 0,
       assembly: driverSum ? (driverValues.assembly / driverSum) * 100 : 0,
       sterilize: driverSum ? (driverValues.sterilize / driverSum) * 100 : 0,
-      basis: driverBasis as 'rates' | 'totals',
+      basis: driverBasis,
     }
 
     const pillarsAboveMedian: Record<PillarKey, boolean> = {
@@ -578,12 +609,16 @@ export const buildReport = (
       (pillarsAboveMedian.assembly ? 1 : 0) +
       (pillarsAboveMedian.sterilize ? 1 : 0)
 
-    const productivity = hoursWorkedAvailable
-      ? (pillarRatePercentiles.decon +
-          pillarRatePercentiles.assembly +
-          pillarRatePercentiles.sterilize) /
-        3
-      : (pillarPercentiles.decon + pillarPercentiles.assembly + pillarPercentiles.sterilize) / 3
+    const productivity =
+      driverBasis === 'rates'
+        ? (pillarRatePercentiles.decon +
+            pillarRatePercentiles.assembly +
+            pillarRatePercentiles.sterilize) /
+          3
+        : driverBasis === 'totals'
+          ? (pillarPercentiles.decon + pillarPercentiles.assembly + pillarPercentiles.sterilize) /
+            3
+          : 0
 
     const quality = percentiles.defectRate * 0.7 + percentiles.assemblyMissingInst * 0.3
 
@@ -591,6 +626,7 @@ export const buildReport = (
 
     return {
       ...user,
+      productivityRanked,
       percentiles,
       pillarPercentiles,
       pillarsAboveMedian,
@@ -611,17 +647,19 @@ export const buildReport = (
   const scoreKeys: ScoreKey[] = ['productivity', 'quality', 'versatility']
 
   const scoreSorted = scoreKeys.reduce((acc, key) => {
-    acc[key] = [...usersWithPercentiles.map((user) => user.scores[key])].sort((a, b) => a - b)
+    acc[key] = [
+      ...usersWithPercentiles
+        .filter((user) => (key === 'productivity' ? user.productivityRanked : true))
+        .map((user) => user.scores[key]),
+    ].sort((a, b) => a - b)
     return acc
   }, {} as Record<ScoreKey, number[]>)
 
   const usersWithScores = usersWithPercentiles.map((user) => {
     const scorePercentiles = {
-      productivityPercentile: percentileFromSorted(
-        user.scores.productivity,
-        scoreSorted.productivity,
-        true,
-      ),
+      productivityPercentile: user.productivityRanked
+        ? percentileFromSorted(user.scores.productivity, scoreSorted.productivity, true)
+        : 0,
       qualityPercentile: percentileFromSorted(user.scores.quality, scoreSorted.quality, true),
       versatilityPercentile: percentileFromSorted(
         user.scores.versatility,
