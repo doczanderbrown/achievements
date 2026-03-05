@@ -675,7 +675,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                         </div>
                         <ul className="mt-1 list-disc space-y-1 pl-4">
                           <li>
-                            Total Hours Worked = Hours Worked + (Activity Time (Mins) / 60)
+                            Total Hours Worked = Hours Worked
                           </li>
                           <li>
                             Units of Service = (Sink Inst x 0.5) + Assembled Inst

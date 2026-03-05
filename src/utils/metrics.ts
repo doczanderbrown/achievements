@@ -473,12 +473,11 @@ export const buildReport = (
 ): ProcessedReport => {
   const hoursWorkedAvailable = options.hoursWorkedAvailable ?? true
   const baseUsers = rows.map((row, index) => {
-    // Normalizing productivity has trade-offs; we use CHRONOS timekeeping hours plus
-    // Activity Time (Mins) to capture work done outside the system.
-    // If hours are missing, productivity falls back to total-volume percentiles.
+    // Normalizing productivity has trade-offs; when available, we use timekeeping
+    // Hours Worked. If hours are missing, productivity falls back to total-volume
+    // percentiles.
     const timekeepingHours = toNumber(row['Hours Worked'])
-    const activityTimeMins = toNumber(row['Activity Time (Mins)'])
-    const hoursWorked = timekeepingHours + activityTimeMins / 60
+    const hoursWorked = timekeepingHours
 
     const deconScans = toNumber(row['Decon Scans'])
     const sinkInst = toNumber(row['Sink Inst'])
