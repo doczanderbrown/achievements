@@ -252,9 +252,13 @@ const upperBound = (values: number[], target: number) => {
 
 const percentileFromSorted = (value: number, sortedValues: number[], higherBetter: boolean) => {
   if (!sortedValues.length) return 0
+  if (sortedValues.length === 1) return 100
   const lower = lowerBound(sortedValues, value)
   const upper = upperBound(sortedValues, value)
-  const p = ((lower + 0.5 * (upper - lower)) / sortedValues.length) * 100
+  // Tie-adjusted midpoint rank, normalized so the lowest unique value maps to 0
+  // and highest unique value maps to 100 for small cohorts.
+  const midpointRank = lower + 0.5 * (upper - lower)
+  const p = ((midpointRank - 0.5) / (sortedValues.length - 1)) * 100
   const oriented = higherBetter ? p : 100 - p
   return Math.max(0, Math.min(100, oriented))
 }
