@@ -1,9 +1,12 @@
-import { Unzip, UnzipInflate } from 'fflate'
+import {
+  BlobReader,
+  TextWriter,
+  Writer,
+  ZipReader,
+  type Entry,
+  type FileEntry,
+} from '@zip.js/zip.js'
 import type { RtlsParseProgress, RtlsScanDataset } from '../types'
-
-type EntryHandler = {
-  onChunk: (chunk: Uint8Array, final: boolean) => void
-}
 
 type ParsedCell = {
   type: string
@@ -85,7 +88,7 @@ const extractTargetCells = (rowXml: string, targetCols: Set<string>): ParsedCell
 const createWorksheetRowParser = (
   targetCols: Set<string>,
   onRow: (rowNumber: number, cells: ParsedCells) => void,
-): EntryHandler => {
+) => {
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
   const consumeText = (text: string) => {
@@ -123,7 +126,7 @@ const createWorksheetRowParser = (
   }
 
   return {
-    onChunk: (chunk, final) => {
+    onChunk: (chunk: Uint8Array, final: boolean) => {
       if (chunk.length === 0) {
         consumeText(decoder.decode(chunk, { stream: !final }))
         return
@@ -141,7 +144,7 @@ const createWorksheetRowParser = (
 const createSharedStringsParser = (
   neededIndices: Set<number>,
   sharedLookup: Map<number, string>,
-): EntryHandler => {
+) => {
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
   let sharedIndex = -1
@@ -186,7 +189,7 @@ const createSharedStringsParser = (
   }
 
   return {
-    onChunk: (chunk, final) => {
+    onChunk: (chunk: Uint8Array, final: boolean) => {
       if (chunk.length === 0) {
         consumeText(decoder.decode(chunk, { stream: !final }))
         return
@@ -201,81 +204,40 @@ const createSharedStringsParser = (
   }
 }
 
-const runZipPass = async (file: File, handlers: Map<string, EntryHandler>) => {
-  return new Promise<void>((resolve, reject) => {
-    const unzip = new Unzip((entry) => {
-      const handler = handlers.get(entry.name)
-      if (!handler) {
-        entry.terminate()
-        return
-      }
-
-      entry.ondata = (err, data, final) => {
-        if (err) {
-          reject(err)
-          return
-        }
-        try {
-          handler.onChunk(data, final)
-        } catch (parseError) {
-          reject(parseError as Error)
-        }
-      }
-      entry.start()
-    })
-
-    unzip.register(UnzipInflate)
-
-    const reader = file.stream().getReader()
-    let settled = false
-
-    const fail = (error: unknown) => {
-      if (settled) return
-      settled = true
-      reject(error)
-      reader.cancel().catch(() => {})
-    }
-
-    const pump = async () => {
-      try {
-        while (true) {
-          const { value, done } = await reader.read()
-          unzip.push(value ?? new Uint8Array(0), done)
-          if (done) break
-        }
-        if (!settled) {
-          settled = true
-          resolve()
-        }
-      } catch (error) {
-        fail(error)
-      }
-    }
-
-    pump().catch(fail)
-  })
+const toFileEntriesByPath = (entries: Entry[]) => {
+  const map = new Map<string, FileEntry>()
+  for (const entry of entries) {
+    if (entry.directory) continue
+    map.set(entry.filename, entry)
+  }
+  return map
 }
 
-const createXmlCollector = (onComplete: (xml: string) => void): EntryHandler => {
-  const decoder = new TextDecoder('utf-8')
-  let xml = ''
+const readXmlEntry = async (entry: FileEntry) => {
+  return entry.getData(new TextWriter(), { useWebWorkers: false })
+}
 
-  return {
-    onChunk: (chunk, final) => {
-      if (chunk.length === 0) {
-        xml += decoder.decode(chunk, { stream: !final })
-      } else {
-        for (let offset = 0; offset < chunk.length; offset += DECODE_SLICE_BYTES) {
-          const end = Math.min(offset + DECODE_SLICE_BYTES, chunk.length)
-          const isLastSlice = final && end === chunk.length
-          xml += decoder.decode(chunk.subarray(offset, end), { stream: !isLastSlice })
-        }
+const streamEntry = async (
+  entry: FileEntry,
+  onChunk: (chunk: Uint8Array, final: boolean) => void,
+) => {
+  class StreamingWriter extends Writer<void> {
+    private closed = false
+
+    async writeUint8Array(array: Uint8Array) {
+      onChunk(array, false)
+    }
+
+    async getData() {
+      if (!this.closed) {
+        this.closed = true
+        onChunk(new Uint8Array(0), true)
       }
-      if (final) {
-        onComplete(xml)
-      }
-    },
+      return
+    }
   }
+
+  await entry.getData(new StreamingWriter(), { useWebWorkers: false })
 }
 
 const normalizeEntryPath = (target: string) => {
@@ -286,17 +248,13 @@ const normalizeEntryPath = (target: string) => {
   return `xl/${clean}`
 }
 
-const resolveSheetEntry = async (file: File) => {
-  let workbookXml = ''
-  let relsXml = ''
+const resolveSheetEntry = async (fileEntriesByPath: Map<string, FileEntry>) => {
+  const workbookEntry = fileEntriesByPath.get(WORKBOOK_ENTRY)
+  const relsEntry = fileEntriesByPath.get(WORKBOOK_RELS_ENTRY)
+  if (!workbookEntry || !relsEntry) return null
 
-  await runZipPass(
-    file,
-    new Map<string, EntryHandler>([
-      [WORKBOOK_ENTRY, createXmlCollector((xml) => (workbookXml = xml))],
-      [WORKBOOK_RELS_ENTRY, createXmlCollector((xml) => (relsXml = xml))],
-    ]),
-  )
+  const workbookXml = await readXmlEntry(workbookEntry)
+  const relsXml = await readXmlEntry(relsEntry)
 
   const relIdToEntry = new Map<string, string>()
   const relPattern = /<Relationship\b[^>]*\bId="([^"]+)"[^>]*\bTarget="([^"]+)"/g
@@ -389,106 +347,119 @@ export const parseRtlsScanWorkbook = async (
   file: File,
   onProgress?: (progress: RtlsParseProgress) => void,
 ): Promise<RtlsScanDataset> => {
-  const sheetEntry = await resolveSheetEntry(file)
-  if (!sheetEntry) {
-    throw new Error('Workbook format not recognized. No worksheet could be located.')
-  }
+  const zipReader = new ZipReader(new BlobReader(file), { useWebWorkers: false })
 
-  const neededSharedIndices = new Set<number>()
-  const rawValueLookup: string[] = []
-  const rawValueToId = new Map<string, number>()
-
-  const invKeys: number[] = []
-  const locationKeys: number[] = []
-  const aliasUserKeys: number[] = []
-  const userKeys: number[] = []
-  const stateKeys: number[] = []
-  const substateKeys: number[] = []
-  const workflowKeys: number[] = []
-  const timestampSerials: number[] = []
-
-  let parsedRows = 0
-
-  const worksheetParser = createWorksheetRowParser(TARGET_COLS, (rowNumber, cells) => {
-    if (rowNumber === 1) return
-    parsedRows += 1
-
-    if (parsedRows % 50_000 === 0) {
-      onProgress?.({
-        phase: 'sheets',
-        message: `Reading scan rows (${parsedRows.toLocaleString()})`,
-        rowsParsed: parsedRows,
-      })
+  try {
+    const entries = await zipReader.getEntries()
+    const fileEntriesByPath = toFileEntriesByPath(entries)
+    const sheetEntryPath = await resolveSheetEntry(fileEntriesByPath)
+    if (!sheetEntryPath) {
+      throw new Error('Workbook format not recognized. No worksheet could be located.')
     }
 
-    const invKey = parseTokenKey(cells.B, neededSharedIndices, rawValueToId, rawValueLookup)
-    if (invKey === 0) return
+    const sheetEntry = fileEntriesByPath.get(sheetEntryPath)
+    if (!sheetEntry) {
+      throw new Error('Workbook format not recognized. Unable to find worksheet data entry.')
+    }
 
-    const locationKey =
-      parseTokenKey(cells.P, neededSharedIndices, rawValueToId, rawValueLookup) ||
-      parseTokenKey(cells.O, neededSharedIndices, rawValueToId, rawValueLookup) ||
-      parseTokenKey(cells.K, neededSharedIndices, rawValueToId, rawValueLookup) ||
-      parseTokenKey(cells.J, neededSharedIndices, rawValueToId, rawValueLookup)
-    if (locationKey === 0) return
+    const neededSharedIndices = new Set<number>()
+    const rawValueLookup: string[] = []
+    const rawValueToId = new Map<string, number>()
 
-    const timestampSerial = parseExcelSerial(cells.AI?.value, cells.AH?.value, cells.AG?.value)
-    if (timestampSerial === null) return
+    const invKeys: number[] = []
+    const locationKeys: number[] = []
+    const aliasUserKeys: number[] = []
+    const userKeys: number[] = []
+    const stateKeys: number[] = []
+    const substateKeys: number[] = []
+    const workflowKeys: number[] = []
+    const timestampSerials: number[] = []
 
-    invKeys.push(invKey)
-    locationKeys.push(locationKey)
-    aliasUserKeys.push(
-      parseTokenKey(cells.R, neededSharedIndices, rawValueToId, rawValueLookup),
-    )
-    userKeys.push(parseTokenKey(cells.S, neededSharedIndices, rawValueToId, rawValueLookup))
-    stateKeys.push(parseTokenKey(cells.J, neededSharedIndices, rawValueToId, rawValueLookup))
-    substateKeys.push(parseTokenKey(cells.K, neededSharedIndices, rawValueToId, rawValueLookup))
-    workflowKeys.push(parseTokenKey(cells.M, neededSharedIndices, rawValueToId, rawValueLookup))
-    timestampSerials.push(timestampSerial)
-  })
+    let parsedRows = 0
 
-  onProgress?.({ phase: 'sheets', message: 'Reading worksheet rows...', rowsParsed: 0 })
+    const worksheetParser = createWorksheetRowParser(TARGET_COLS, (rowNumber, cells) => {
+      if (rowNumber === 1) return
+      parsedRows += 1
 
-  await runZipPass(file, new Map<string, EntryHandler>([[sheetEntry, worksheetParser]]))
+      if (parsedRows % 50_000 === 0) {
+        onProgress?.({
+          phase: 'sheets',
+          message: `Reading scan rows (${parsedRows.toLocaleString()})`,
+          rowsParsed: parsedRows,
+        })
+      }
 
-  if (parsedRows === 0 || invKeys.length === 0) {
-    throw new Error('No scan rows were parsed. Please verify this is a scan-history export.')
-  }
+      const invKey = parseTokenKey(cells.B, neededSharedIndices, rawValueToId, rawValueLookup)
+      if (invKey === 0) return
 
-  const sharedLookup = new Map<number, string>()
-  if (neededSharedIndices.size > 0) {
+      const locationKey =
+        parseTokenKey(cells.P, neededSharedIndices, rawValueToId, rawValueLookup) ||
+        parseTokenKey(cells.O, neededSharedIndices, rawValueToId, rawValueLookup) ||
+        parseTokenKey(cells.K, neededSharedIndices, rawValueToId, rawValueLookup) ||
+        parseTokenKey(cells.J, neededSharedIndices, rawValueToId, rawValueLookup)
+      if (locationKey === 0) return
+
+      const timestampSerial = parseExcelSerial(cells.AI?.value, cells.AH?.value, cells.AG?.value)
+      if (timestampSerial === null) return
+
+      invKeys.push(invKey)
+      locationKeys.push(locationKey)
+      aliasUserKeys.push(
+        parseTokenKey(cells.R, neededSharedIndices, rawValueToId, rawValueLookup),
+      )
+      userKeys.push(parseTokenKey(cells.S, neededSharedIndices, rawValueToId, rawValueLookup))
+      stateKeys.push(parseTokenKey(cells.J, neededSharedIndices, rawValueToId, rawValueLookup))
+      substateKeys.push(parseTokenKey(cells.K, neededSharedIndices, rawValueToId, rawValueLookup))
+      workflowKeys.push(parseTokenKey(cells.M, neededSharedIndices, rawValueToId, rawValueLookup))
+      timestampSerials.push(timestampSerial)
+    })
+
+    onProgress?.({ phase: 'sheets', message: 'Reading worksheet rows...', rowsParsed: 0 })
+    await streamEntry(sheetEntry, worksheetParser.onChunk)
+
+    if (parsedRows === 0 || invKeys.length === 0) {
+      throw new Error('No scan rows were parsed. Please verify this is a scan-history export.')
+    }
+
+    const sharedLookup = new Map<number, string>()
+    if (neededSharedIndices.size > 0) {
+      const sharedStringsEntry = fileEntriesByPath.get(SHARED_STRINGS_ENTRY)
+      if (!sharedStringsEntry) {
+        throw new Error('Workbook is missing shared strings data (xl/sharedStrings.xml).')
+      }
+
+      onProgress?.({
+        phase: 'shared-strings',
+        message: 'Decoding text labels...',
+        rowsParsed: parsedRows,
+      })
+
+      const sharedStringsParser = createSharedStringsParser(neededSharedIndices, sharedLookup)
+      await streamEntry(sharedStringsEntry, sharedStringsParser.onChunk)
+    }
+
     onProgress?.({
-      phase: 'shared-strings',
-      message: 'Decoding text labels...',
+      phase: 'complete',
+      message: 'Workbook parse complete.',
       rowsParsed: parsedRows,
     })
 
-    await runZipPass(
-      file,
-      new Map<string, EntryHandler>([
-        [SHARED_STRINGS_ENTRY, createSharedStringsParser(neededSharedIndices, sharedLookup)],
-      ]),
-    )
-  }
-
-  onProgress?.({
-    phase: 'complete',
-    message: 'Workbook parse complete.',
-    rowsParsed: parsedRows,
-  })
-
-  return {
-    rows: {
-      invKeys: Int32Array.from(invKeys),
-      locationKeys: Int32Array.from(locationKeys),
-      aliasUserKeys: Int32Array.from(aliasUserKeys),
-      userKeys: Int32Array.from(userKeys),
-      stateKeys: Int32Array.from(stateKeys),
-      substateKeys: Int32Array.from(substateKeys),
-      workflowKeys: Int32Array.from(workflowKeys),
-      timestampSerials: Float64Array.from(timestampSerials),
-    },
-    sharedLookup,
-    rawValueLookup,
-    parsedRows,
+    return {
+      rows: {
+        invKeys: Int32Array.from(invKeys),
+        locationKeys: Int32Array.from(locationKeys),
+        aliasUserKeys: Int32Array.from(aliasUserKeys),
+        userKeys: Int32Array.from(userKeys),
+        stateKeys: Int32Array.from(stateKeys),
+        substateKeys: Int32Array.from(substateKeys),
+        workflowKeys: Int32Array.from(workflowKeys),
+        timestampSerials: Float64Array.from(timestampSerials),
+      },
+      sharedLookup,
+      rawValueLookup,
+      parsedRows,
+    }
+  } finally {
+    await zipReader.close()
   }
 }

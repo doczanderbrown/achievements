@@ -12,6 +12,7 @@
     "api": "node server/pdfServer.mjs"
   },
   "dependencies": {
+    "@zip.js/zip.js": "^2.8.23",
     "express": "^5.2.1",
     "fflate": "^0.8.2",
     "html2canvas": "^1.4.1",
