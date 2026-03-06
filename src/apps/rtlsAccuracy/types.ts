@@ -22,6 +22,7 @@ export type RtlsScanDataset = {
   rawParsedRows: number
   beaconFilterApplied: boolean
   beaconedAssetsCount: number
+  beaconedInvNames: string[]
   excludedNonBeaconRows: number
   excludedInvNameSummaries: RtlsExcludedInvNameSummary[]
 }
@@ -52,6 +53,12 @@ export type RtlsTransitionSummary = {
 export type RtlsExcludedInvNameSummary = {
   invName: string
   count: number
+}
+
+export type RtlsBeaconNoIlocsAsset = {
+  invName: string
+  totalScans: number
+  humanScans: number
 }
 
 export type RtlsEventDetail = {
@@ -103,6 +110,7 @@ export type RtlsDrilldowns = {
   transitionEvents: Record<string, RtlsTransitionDetail[]>
   offPathTransitionEvents: Record<string, RtlsTransitionDetail[]>
   excludedInvNames: RtlsExcludedInvNameSummary[]
+  beaconedNeverIlocsAssets: RtlsBeaconNoIlocsAsset[]
 }
 
 export type RtlsAnalysisResult = {
@@ -110,6 +118,7 @@ export type RtlsAnalysisResult = {
   rawParsedRows: number
   beaconFilterApplied: boolean
   beaconedAssetsCount: number
+  beaconedNeverIlocsCount: number
   excludedNonBeaconRows: number
   excludedInvNameSummaries: RtlsExcludedInvNameSummary[]
   ilocsRoomChanges: number

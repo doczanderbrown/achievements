@@ -484,13 +484,18 @@ export const parseRtlsScanWorkbook = async (
       await streamEntry(sharedStringsEntry, sharedStringsParser.onChunk)
     }
 
-    const beaconedNameSet = new Set<string>()
+    const beaconedNameByNormalized = new Map<string, string>()
     for (const invNameKey of beaconInvNameKeys) {
-      const normalized = normalizeName(decodeTokenKey(invNameKey, sharedLookup, rawValueLookup))
-      if (normalized) {
-        beaconedNameSet.add(normalized)
-      }
+      const rawInvName = decodeTokenKey(invNameKey, sharedLookup, rawValueLookup).trim()
+      const normalized = normalizeName(rawInvName)
+      if (!normalized) continue
+      if (beaconedNameByNormalized.has(normalized)) continue
+      beaconedNameByNormalized.set(normalized, rawInvName)
     }
+    const beaconedNameSet = new Set(beaconedNameByNormalized.keys())
+    const beaconedInvNames = Array.from(beaconedNameByNormalized.values()).sort((left, right) =>
+      left.localeCompare(right),
+    )
 
     const rawParsedRows = invKeys.length
     const beaconFilterApplied = beaconedNameSet.size > 0
@@ -560,6 +565,7 @@ export const parseRtlsScanWorkbook = async (
       rawParsedRows,
       beaconFilterApplied,
       beaconedAssetsCount: beaconedNameSet.size,
+      beaconedInvNames,
       excludedNonBeaconRows,
       excludedInvNameSummaries,
     }

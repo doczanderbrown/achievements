@@ -30,6 +30,15 @@ type DrilldownState = {
   rows: DrilldownRow[]
 }
 
+type AreaAccuracySummary = {
+  location: string
+  ilocsCount: number
+  matchedCount: number
+  accuracyRate: number
+  ilocsEvents: RtlsEventDetail[]
+  matchedEvents: RtlsMatchDetail[]
+}
+
 const DEFAULT_CONFIG: RtlsAnalysisConfig = {
   ilocsKeyword: 'ilocs',
   humanBeforeHours: 4,
@@ -131,6 +140,48 @@ const excludedColumns: DrilldownColumn[] = [
   { key: 'invName', label: 'Excluded Inv Name' },
   { key: 'count', label: 'Rows', align: 'right' },
 ]
+
+const beaconNeverIlocsColumns: DrilldownColumn[] = [
+  { key: 'invName', label: 'Beaconed Asset' },
+  { key: 'totalScans', label: 'Total Scans', align: 'right' },
+  { key: 'humanScans', label: 'Human Scans', align: 'right' },
+]
+
+const areaEventColumns: DrilldownColumn[] = [
+  { key: 'invName', label: 'Inv Name' },
+  { key: 'invId', label: 'InvID' },
+  { key: 'location', label: 'Location' },
+  { key: 'stage', label: 'Stage' },
+  { key: 'matchStatus', label: 'Match' },
+  { key: 'aliasUser', label: 'ilocs User' },
+  { key: 'timestamp', label: 'ilocs Time' },
+]
+
+const locationEventKey = (invId: string, location: string, timestampSerial: number) => {
+  return `${invId}|${location}|${timestampSerial.toFixed(8)}`
+}
+
+const toAreaEventRows = (
+  area: AreaAccuracySummary,
+  matchedIlocsKeys: Set<string>,
+): DrilldownRow[] => {
+  return area.ilocsEvents
+    .slice()
+    .sort((left, right) => right.timestampSerial - left.timestampSerial)
+    .map((event) => ({
+      invName: event.invName,
+      invId: event.invId,
+      location: event.location,
+      stage: event.stage,
+      matchStatus: matchedIlocsKeys.has(
+        locationEventKey(event.invId, event.location, event.timestampSerial),
+      )
+        ? 'Matched'
+        : 'Unmatched',
+      aliasUser: event.aliasUser || '—',
+      timestamp: formatDateTime(event.timestampSerial),
+    }))
+}
 
 const toEventRows = (events: RtlsEventDetail[]): DrilldownRow[] => {
   return events.map((event) => ({
@@ -271,6 +322,21 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
     })
   }
 
+  const openBeaconNeverIlocsDrilldown = () => {
+    if (!analysis) return
+    const rows = analysis.drilldowns.beaconedNeverIlocsAssets.map((entry) => ({
+      invName: entry.invName,
+      totalScans: entry.totalScans.toLocaleString(),
+      humanScans: entry.humanScans.toLocaleString(),
+    }))
+    openDrilldown({
+      title: 'Beaconed Assets With No ilocs Scans',
+      subtitle: 'Beacon-list assets where ilocs scan count is zero in the selected workbook.',
+      columns: beaconNeverIlocsColumns,
+      rows,
+    })
+  }
+
   const openUnmatchedDrilldown = () => {
     if (!analysis) return
     const combined: RtlsEventDetail[] = [
@@ -282,6 +348,90 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
       'Combined ilocs and human room-change events that did not match inside the selected window.',
       combined,
     )
+  }
+
+  const areaAccuracySummaries = useMemo<AreaAccuracySummary[]>(() => {
+    if (!analysis) return []
+
+    const areaMap = new Map<string, AreaAccuracySummary>()
+    for (const event of analysis.drilldowns.ilocsEvents) {
+      const location = event.location || 'Unknown Location'
+      const existing = areaMap.get(location)
+      if (existing) {
+        existing.ilocsEvents.push(event)
+      } else {
+        areaMap.set(location, {
+          location,
+          ilocsCount: 0,
+          matchedCount: 0,
+          accuracyRate: 0,
+          ilocsEvents: [event],
+          matchedEvents: [],
+        })
+      }
+    }
+
+    for (const match of analysis.drilldowns.matchedEvents) {
+      const location = match.location || 'Unknown Location'
+      const existing = areaMap.get(location)
+      if (existing) {
+        existing.matchedEvents.push(match)
+      } else {
+        areaMap.set(location, {
+          location,
+          ilocsCount: 0,
+          matchedCount: 0,
+          accuracyRate: 0,
+          ilocsEvents: [],
+          matchedEvents: [match],
+        })
+      }
+    }
+
+    return Array.from(areaMap.values())
+      .map((area) => {
+        const ilocsCount = area.ilocsEvents.length
+        const matchedCount = area.matchedEvents.length
+        return {
+          ...area,
+          ilocsCount,
+          matchedCount,
+          accuracyRate: ilocsCount > 0 ? (matchedCount / ilocsCount) * 100 : 0,
+        }
+      })
+      .filter((area) => area.ilocsCount > 0)
+      .sort((left, right) => {
+        if (right.accuracyRate !== left.accuracyRate) return right.accuracyRate - left.accuracyRate
+        if (right.ilocsCount !== left.ilocsCount) return right.ilocsCount - left.ilocsCount
+        return left.location.localeCompare(right.location)
+      })
+  }, [analysis])
+
+  const matchedIlocsKeySet = useMemo(() => {
+    if (!analysis) return new Set<string>()
+    return new Set(
+      analysis.drilldowns.matchedEvents.map((match) =>
+        locationEventKey(match.invId, match.location, match.ilocsTimestampSerial),
+      ),
+    )
+  }, [analysis])
+
+  const mostAccurateArea = areaAccuracySummaries.length > 0 ? areaAccuracySummaries[0] : null
+  const leastAccurateArea =
+    areaAccuracySummaries.length > 1
+      ? areaAccuracySummaries[areaAccuracySummaries.length - 1]
+      : areaAccuracySummaries.length === 1
+        ? areaAccuracySummaries[0]
+        : null
+
+  const openAreaAccuracyDrilldown = (title: string, area: AreaAccuracySummary | null) => {
+    if (!area) return
+    openDrilldown({
+      title,
+      subtitle: `${area.location} accuracy ${formatPercent(area.accuracyRate)} (${area.matchedCount.toLocaleString()} matched of ${area.ilocsCount.toLocaleString()} ilocs room changes).`,
+      columns: areaEventColumns,
+      rows: toAreaEventRows(area, matchedIlocsKeySet),
+    })
   }
 
   const drillFilteredRows = useMemo(() => {
@@ -485,6 +635,20 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                 onClick={openExcludedDrilldown}
               />
               <SummaryCard
+                label="Beaconed Assets With No ilocs Scans"
+                value={
+                  analysis.beaconFilterApplied
+                    ? analysis.beaconedNeverIlocsCount.toLocaleString()
+                    : '—'
+                }
+                hint={
+                  analysis.beaconFilterApplied
+                    ? `${analysis.beaconedNeverIlocsCount.toLocaleString()} of ${analysis.beaconedAssetsCount.toLocaleString()} beaconed assets.`
+                    : 'No beaconed assets sheet found in this workbook.'
+                }
+                onClick={analysis.beaconFilterApplied ? openBeaconNeverIlocsDrilldown : undefined}
+              />
+              <SummaryCard
                 label="ilocs Match Rate"
                 value={formatPercent(analysis.ilocsMatchRate)}
                 hint="Based on matched / ilocs room changes."
@@ -506,6 +670,34 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                     'Underlying matched event pairs used in human coverage rate.',
                     analysis.drilldowns.matchedEvents,
                   )
+                }
+              />
+              <SummaryCard
+                label="Most Accurate Area"
+                value={mostAccurateArea?.location ?? '—'}
+                hint={
+                  mostAccurateArea
+                    ? `${formatPercent(mostAccurateArea.accuracyRate)} match rate (${mostAccurateArea.matchedCount.toLocaleString()}/${mostAccurateArea.ilocsCount.toLocaleString()})`
+                    : 'No ilocs area events available.'
+                }
+                onClick={
+                  mostAccurateArea
+                    ? () => openAreaAccuracyDrilldown('Most Accurate Area', mostAccurateArea)
+                    : undefined
+                }
+              />
+              <SummaryCard
+                label="Least Accurate Area"
+                value={leastAccurateArea?.location ?? '—'}
+                hint={
+                  leastAccurateArea
+                    ? `${formatPercent(leastAccurateArea.accuracyRate)} match rate (${leastAccurateArea.matchedCount.toLocaleString()}/${leastAccurateArea.ilocsCount.toLocaleString()})`
+                    : 'No ilocs area events available.'
+                }
+                onClick={
+                  leastAccurateArea
+                    ? () => openAreaAccuracyDrilldown('Least Accurate Area', leastAccurateArea)
+                    : undefined
                 }
               />
               <SummaryCard

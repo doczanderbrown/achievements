@@ -1,6 +1,7 @@
 import type {
   RtlsAnalysisConfig,
   RtlsAnalysisResult,
+  RtlsBeaconNoIlocsAsset,
   RtlsDrilldowns,
   RtlsEventDetail,
   RtlsMatchDetail,
@@ -192,6 +193,12 @@ type GroupedEvents = {
   human: RtlsEventDetail[]
 }
 
+type BeaconScanCounts = {
+  total: number
+  human: number
+  ilocs: number
+}
+
 export const analyzeRtlsDataset = (
   dataset: RtlsScanDataset,
   config: RtlsAnalysisConfig,
@@ -243,6 +250,19 @@ export const analyzeRtlsDataset = (
 
   const ilocsEvents: RtlsEventDetail[] = []
   const humanEvents: RtlsEventDetail[] = []
+  const beaconedNameByNormalized = new Map<string, string>()
+  const beaconScanCounts = new Map<string, BeaconScanCounts>()
+
+  for (const beaconedInvName of dataset.beaconedInvNames) {
+    const normalized = normalize(beaconedInvName)
+    if (!normalized || beaconedNameByNormalized.has(normalized)) continue
+    beaconedNameByNormalized.set(normalized, beaconedInvName)
+    beaconScanCounts.set(normalized, {
+      total: 0,
+      human: 0,
+      ilocs: 0,
+    })
+  }
 
   const getScannerType = (aliasUserKey: number, userKey: number) => {
     const cacheKey = `${aliasUserKey}|${userKey}`
@@ -317,6 +337,13 @@ export const analyzeRtlsDataset = (
   for (let position = 0; position < rowCount; position += 1) {
     const rowIndex = rowAt(position)
     const scannerType = getScannerType(rows.aliasUserKeys[rowIndex], rows.userKeys[rowIndex])
+    const normalizedInvName = normalize(decodeValue(rows.invNameKeys[rowIndex]))
+    const beaconCounts = beaconScanCounts.get(normalizedInvName)
+    if (beaconCounts) {
+      beaconCounts.total += 1
+      if (scannerType === 'human') beaconCounts.human += 1
+      if (scannerType === 'ilocs') beaconCounts.ilocs += 1
+    }
     if (scannerType === 'unknown') continue
 
     const invKey = rows.invKeys[rowIndex]
@@ -472,6 +499,19 @@ export const analyzeRtlsDataset = (
     })
     .sort((left, right) => right.count - left.count)
 
+  const beaconedNeverIlocsAssets: RtlsBeaconNoIlocsAsset[] = Array.from(beaconScanCounts.entries())
+    .filter(([, counts]) => counts.ilocs === 0)
+    .map(([normalized, counts]) => ({
+      invName: beaconedNameByNormalized.get(normalized) ?? normalized,
+      totalScans: counts.total,
+      humanScans: counts.human,
+    }))
+    .sort((left, right) => {
+      if (right.totalScans !== left.totalScans) return right.totalScans - left.totalScans
+      if (right.humanScans !== left.humanScans) return right.humanScans - left.humanScans
+      return left.invName.localeCompare(right.invName)
+    })
+
   const drilldowns: RtlsDrilldowns = {
     ilocsEvents,
     humanEvents,
@@ -483,6 +523,7 @@ export const analyzeRtlsDataset = (
     transitionEvents: mapListToRecord(transitionEventsMap),
     offPathTransitionEvents: mapListToRecord(offPathTransitionEventsMap),
     excludedInvNames: dataset.excludedInvNameSummaries,
+    beaconedNeverIlocsAssets,
   }
 
   return {
@@ -490,6 +531,7 @@ export const analyzeRtlsDataset = (
     rawParsedRows: dataset.rawParsedRows,
     beaconFilterApplied: dataset.beaconFilterApplied,
     beaconedAssetsCount: dataset.beaconedAssetsCount,
+    beaconedNeverIlocsCount: beaconedNeverIlocsAssets.length,
     excludedNonBeaconRows: dataset.excludedNonBeaconRows,
     excludedInvNameSummaries: dataset.excludedInvNameSummaries,
     ilocsRoomChanges: ilocsEvents.length,
