@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import * as XLSX from 'xlsx'
 import type {
   RtlsAnalysisConfig,
   RtlsAnalysisResult,
@@ -50,6 +51,11 @@ const DAY_MS = 24 * 60 * 60 * 1000
 
 const formatPercent = (value: number) => `${value.toFixed(1)}%`
 const formatHours = (value: number) => `${value.toFixed(2)}h`
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
 
 const formatDateTime = (serial: number) => {
   if (!Number.isFinite(serial)) return '—'
@@ -449,6 +455,24 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
     (safeDrillPage - 1) * DRILLDOWN_PAGE_SIZE,
     safeDrillPage * DRILLDOWN_PAGE_SIZE,
   )
+
+  const exportDrilldownToExcel = () => {
+    if (!drilldown) return
+
+    const header = drilldown.columns.map((column) => column.label)
+    const rows = drillFilteredRows.map((row) =>
+      drilldown.columns.map((column) => String(row[column.key] ?? '')),
+    )
+    const worksheet = XLSX.utils.aoa_to_sheet([header, ...rows])
+    const workbook = XLSX.utils.book_new()
+
+    const sheetName = (slugify(drilldown.title) || 'drilldown').slice(0, 31)
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName)
+
+    const dateSuffix = new Date().toISOString().slice(0, 10)
+    const fileName = `${slugify(drilldown.title) || 'drilldown'}-${dateSuffix}.xlsx`
+    XLSX.writeFile(workbook, fileName)
+  }
 
   return (
     <div className="relative min-h-screen overflow-hidden">
@@ -954,6 +978,14 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
               <span className="rounded-full border border-ink/15 px-3 py-1 text-xs text-muted">
                 Rows: {drillFilteredRows.length.toLocaleString()}
               </span>
+              <button
+                type="button"
+                onClick={exportDrilldownToExcel}
+                disabled={drillFilteredRows.length === 0}
+                className="rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-ink disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Export Excel
+              </button>
             </div>
 
             <div className="flex-1 overflow-auto px-5 py-4">
