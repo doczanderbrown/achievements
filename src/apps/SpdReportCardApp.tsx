@@ -39,6 +39,7 @@ const leaderboardOptions: LeaderboardOption[] = [
     higherBetter: true,
     type: 'score',
     getValue: (user) => user.scores.overall,
+    getPercentile: (user) => user.scores.overallPercentile,
   },
   {
     key: 'productivity',
@@ -747,7 +748,8 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                             (0-200).
                           </li>
                           <li>
-                            Card percentile display = Overall Processing Score / 2.
+                            Card percentile display = percentile rank of Overall Processing Score
+                            within the current peer cohort.
                           </li>
                         </ul>
                       </div>

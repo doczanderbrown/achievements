@@ -160,6 +160,7 @@ export type UserScores = {
   quality: number
   versatility: number
   overall: number
+  overallPercentile: number
   productivityPercentile: number
   qualityPercentile: number
   versatilityPercentile: number
@@ -640,6 +641,7 @@ export const buildReport = (
         quality,
         versatility,
         overall: 0,
+        overallPercentile: 0,
         productivityPercentile: 0,
         qualityPercentile: 0,
         versatilityPercentile: 0,
@@ -659,21 +661,31 @@ export const buildReport = (
     return acc
   }, {} as Record<ScoreKey, number[]>)
 
-  const usersWithScores = usersWithPercentiles.map((user) => {
-    const scorePercentiles = {
-      productivityPercentile: user.productivityRanked
-        ? percentileFromSorted(user.scores.productivity, scoreSorted.productivity, true)
-        : 0,
-      qualityPercentile: percentileFromSorted(user.scores.quality, scoreSorted.quality, true),
-      versatilityPercentile: percentileFromSorted(
-        user.scores.versatility,
-        scoreSorted.versatility,
-        true,
-      ),
+  const scorePercentilesByUser = usersWithPercentiles.map((user) => {
+    const productivityPercentile = user.productivityRanked
+      ? percentileFromSorted(user.scores.productivity, scoreSorted.productivity, true)
+      : 0
+    const qualityPercentile = percentileFromSorted(user.scores.quality, scoreSorted.quality, true)
+    const versatilityPercentile = percentileFromSorted(
+      user.scores.versatility,
+      scoreSorted.versatility,
+      true,
+    )
+    const overall = productivityPercentile + qualityPercentile
+    return {
+      productivityPercentile,
+      qualityPercentile,
+      versatilityPercentile,
+      overall,
     }
+  })
+  const sortedOverallScores = [...scorePercentilesByUser.map((scores) => scores.overall)].sort(
+    (a, b) => a - b,
+  )
 
-    const overall =
-      scorePercentiles.productivityPercentile + scorePercentiles.qualityPercentile
+  const usersWithScores = usersWithPercentiles.map((user, index) => {
+    const scorePercentiles = scorePercentilesByUser[index]
+    const overallPercentile = percentileFromSorted(scorePercentiles.overall, sortedOverallScores, true)
 
     const contributionsTotal =
       user.pillarTotals.decon + user.pillarTotals.assembly + user.pillarTotals.sterilize
@@ -772,7 +784,7 @@ export const buildReport = (
       scores: {
         ...user.scores,
         ...scorePercentiles,
-        overall,
+        overallPercentile,
       },
       archetype,
       badges,

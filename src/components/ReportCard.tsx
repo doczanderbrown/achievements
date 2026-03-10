@@ -71,10 +71,9 @@ const ScoreBlock = ({
   )
 }
 
-const OverallScoreBlock = ({ score }: { score: number }) => {
-  const percentileEquivalent = score / 2
-  const colorClass = getPercentileColor(percentileEquivalent)
-  const rounded = Math.round(percentileEquivalent)
+const OverallScoreBlock = ({ score, percentile }: { score: number; percentile: number }) => {
+  const colorClass = getPercentileColor(percentile)
+  const rounded = Math.round(percentile)
   const suffix = (() => {
     const mod100 = rounded % 100
     if (mod100 >= 11 && mod100 <= 13) return 'th'
@@ -276,7 +275,10 @@ const ReportCard = ({
       </div>
 
       <div className="space-y-3">
-        <OverallScoreBlock score={user.scores.overall} />
+        <OverallScoreBlock
+          score={user.scores.overall}
+          percentile={user.scores.overallPercentile}
+        />
         <div className="grid gap-3 md:grid-cols-3">
           <ScoreBlock
             label="Productivity"
