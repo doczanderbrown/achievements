@@ -3,7 +3,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  ComposedChart,
   Legend,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -29,6 +31,7 @@ type QualityDataset = {
     inventoryRowsScanned: number
     inventoryRowsUsable: number
     inventoryMatchedInvKeys: number
+    inventoryAggregateGroups: number
     matchedRows: number
     unmatchedRows: number
   }
@@ -43,6 +46,7 @@ type QualityDataset = {
     specialties: string[]
     itemTypes: string[]
     hsysTags: string[]
+    months: string[]
   }
   rows: {
     reportedSerials: number[]
@@ -55,6 +59,14 @@ type QualityDataset = {
     itemTypeIds: number[]
     hsysTagIds: number[]
     matchedFlags: number[]
+  }
+  inventoryAggregates: {
+    monthIds: number[]
+    processingFacilityIds: number[]
+    specialtyIds: number[]
+    itemTypeIds: number[]
+    hsysTagIds: number[]
+    counts: number[]
   }
 }
 
@@ -95,6 +107,10 @@ const EXCEL_OFFSET = 25569
 const TOP_TREND_LOCATIONS = 4
 const DRILLDOWN_PAGE_SIZE = 25
 const PROCESSING_COLORS = ['#f59e0b', '#2563eb', '#10b981', '#0ea5e9', '#6366f1']
+const RATE_COLOR = '#38bdf8'
+const TRAYS_COLOR = '#9ccc65'
+const EVENTS_COLOR = '#f28c28'
+const SET_ITEM_TOKENS = ['set', 'tray']
 
 const excelSerialToDate = (serial: number) => new Date((serial - EXCEL_OFFSET) * DAY_MS)
 
@@ -152,6 +168,11 @@ const toMonthKey = (serial: number) => {
   const year = date.getUTCFullYear()
   const month = String(date.getUTCMonth() + 1).padStart(2, '0')
   return `${year}-${month}`
+}
+
+const isSetLikeItemType = (label: string) => {
+  const normalized = label.trim().toLowerCase()
+  return SET_ITEM_TOKENS.some((token) => normalized.includes(token))
 }
 
 const getTopLabelFromCounts = (counts: Map<number, number>, labels: string[]) => {
@@ -400,6 +421,122 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
     selectedQSubTypes.length,
     selectedRecordedBys.length,
     selectedSpecialties.length,
+  ])
+
+  const setLikeItemTypeIds = useMemo(() => {
+    if (!dataset) return new Set<number>()
+    const next = new Set<number>()
+    dataset.lookups.itemTypes.forEach((label, id) => {
+      if (isSetLikeItemType(label)) {
+        next.add(id)
+      }
+    })
+    return next
+  }, [dataset])
+
+  const sharedFilteredEventIndices = useMemo(() => {
+    if (!dataset || !dateRange) return []
+
+    const { rows } = dataset
+    const filtered: number[] = []
+    const rowCount = rows.reportedSerials.length
+
+    for (let index = 0; index < rowCount; index += 1) {
+      const reportedSerial = rows.reportedSerials[index]
+      if (reportedSerial < dateRange.fromSerial || reportedSerial > dateRange.toSerial) continue
+      if (rows.matchedFlags[index] !== 1) continue
+
+      const processingId = rows.processingFacilityIds[index]
+      if (selectedProcessingFacilities.length > 0 && !filterSets.processing.has(processingId)) continue
+
+      const specialtyId = rows.specialtyIds[index]
+      if (selectedSpecialties.length > 0 && !filterSets.specialty.has(specialtyId)) continue
+
+      const itemTypeId = rows.itemTypeIds[index]
+      if (!setLikeItemTypeIds.has(itemTypeId)) continue
+      if (selectedItemTypes.length > 0 && !filterSets.itemType.has(itemTypeId)) continue
+
+      const hsysTagId = rows.hsysTagIds[index]
+      if (selectedHsysTags.length > 0 && !filterSets.hsysTag.has(hsysTagId)) continue
+
+      filtered.push(index)
+    }
+
+    return filtered
+  }, [
+    dataset,
+    dateRange,
+    filterSets,
+    selectedHsysTags.length,
+    selectedItemTypes.length,
+    selectedProcessingFacilities.length,
+    selectedSpecialties.length,
+    setLikeItemTypeIds,
+  ])
+
+  const withoutEventByMonth = useMemo(() => {
+    if (!dataset || !dateRange) return []
+    const { rows, lookups, inventoryAggregates } = dataset
+    const fromMonth = toMonthKey(dateRange.fromSerial)
+    const toMonth = toMonthKey(dateRange.toSerial)
+
+    const traysByMonth = new Map<string, number>()
+    for (let index = 0; index < inventoryAggregates.counts.length; index += 1) {
+      const monthKey = lookups.months[inventoryAggregates.monthIds[index]]
+      if (!monthKey) continue
+      if (monthKey < fromMonth || monthKey > toMonth) continue
+
+      const processingId = inventoryAggregates.processingFacilityIds[index]
+      if (selectedProcessingFacilities.length > 0 && !filterSets.processing.has(processingId)) continue
+
+      const specialtyId = inventoryAggregates.specialtyIds[index]
+      if (selectedSpecialties.length > 0 && !filterSets.specialty.has(specialtyId)) continue
+
+      const itemTypeId = inventoryAggregates.itemTypeIds[index]
+      if (!setLikeItemTypeIds.has(itemTypeId)) continue
+      if (selectedItemTypes.length > 0 && !filterSets.itemType.has(itemTypeId)) continue
+
+      const hsysTagId = inventoryAggregates.hsysTagIds[index]
+      if (selectedHsysTags.length > 0 && !filterSets.hsysTag.has(hsysTagId)) continue
+
+      traysByMonth.set(monthKey, (traysByMonth.get(monthKey) ?? 0) + inventoryAggregates.counts[index])
+    }
+
+    const eventsByMonth = new Map<string, number>()
+    sharedFilteredEventIndices.forEach((index) => {
+      const monthKey = toMonthKey(rows.reportedSerials[index])
+      if (monthKey < fromMonth || monthKey > toMonth) return
+      eventsByMonth.set(monthKey, (eventsByMonth.get(monthKey) ?? 0) + 1)
+    })
+
+    const allMonths = new Set<string>([...traysByMonth.keys(), ...eventsByMonth.keys()])
+
+    return Array.from(allMonths)
+      .sort((left, right) => left.localeCompare(right))
+      .map((monthKey) => {
+        const traysProcessed = traysByMonth.get(monthKey) ?? 0
+        const events = eventsByMonth.get(monthKey) ?? 0
+        const setsWithoutEvents = Math.max(0, traysProcessed - events)
+        const rateWithoutEvents = traysProcessed > 0 ? (setsWithoutEvents / traysProcessed) * 100 : 0
+        return {
+          monthKey,
+          monthLabel: formatMonth(monthKey),
+          traysProcessed,
+          events,
+          setsWithoutEvents,
+          rateWithoutEvents,
+        }
+      })
+  }, [
+    dataset,
+    dateRange,
+    filterSets,
+    selectedHsysTags.length,
+    selectedItemTypes.length,
+    selectedProcessingFacilities.length,
+    selectedSpecialties.length,
+    setLikeItemTypeIds,
+    sharedFilteredEventIndices,
   ])
 
   const summary = useMemo(() => {
@@ -753,6 +890,92 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
                   }
                 />
               </div>
+
+              <article className="rounded-3xl border border-ink/10 bg-white/90 p-5 shadow-sm">
+                <h2 className="text-lg font-semibold text-ink">Sets Processed Without OR Events</h2>
+                <p className="mt-1 text-sm text-muted">
+                  Monthly view of set-like items (Set/Vendor Set/etc): trays processed, OR events, and percent without
+                  events.
+                </p>
+                {withoutEventByMonth.length === 0 ? (
+                  <p className="mt-4 text-sm text-muted">No processed-set volume found for the current shared filters.</p>
+                ) : (
+                  <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+                    <div className="h-[360px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart
+                          data={withoutEventByMonth}
+                          margin={{ top: 12, right: 12, bottom: 12, left: 12 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.32)" />
+                          <XAxis dataKey="monthLabel" />
+                          <YAxis
+                            yAxisId="percent"
+                            orientation="left"
+                            domain={[0, 100]}
+                            tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
+                          />
+                          <YAxis
+                            yAxisId="count"
+                            orientation="right"
+                            tickFormatter={(value) => formatNumber(Number(value))}
+                          />
+                          <Tooltip
+                            formatter={(value, name) => {
+                              if (name === 'Rate Without Events') {
+                                return formatPercent(Number(value))
+                              }
+                              return formatNumber(Number(value))
+                            }}
+                          />
+                          <Legend />
+                          <Bar
+                            yAxisId="count"
+                            dataKey="traysProcessed"
+                            name="Trays Processed"
+                            fill={TRAYS_COLOR}
+                            opacity={0.9}
+                          />
+                          <Bar yAxisId="count" dataKey="events" name="Events" fill={EVENTS_COLOR} />
+                          <Line
+                            yAxisId="percent"
+                            type="monotone"
+                            dataKey="rateWithoutEvents"
+                            name="Rate Without Events"
+                            stroke={RATE_COLOR}
+                            strokeWidth={2}
+                            dot={false}
+                          />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="max-h-[360px] overflow-auto rounded-2xl border border-ink/10 bg-white">
+                      <table className="min-w-full border-collapse text-sm">
+                        <thead className="sticky top-0 bg-white">
+                          <tr className="border-b border-ink/10 text-left text-xs uppercase tracking-[0.12em] text-muted">
+                            <th className="px-3 py-2 font-semibold">Month</th>
+                            <th className="px-3 py-2 font-semibold">Rate</th>
+                            <th className="px-3 py-2 font-semibold">Trays</th>
+                            <th className="px-3 py-2 font-semibold">Events</th>
+                            <th className="px-3 py-2 font-semibold">Without Events</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {withoutEventByMonth.map((row) => (
+                            <tr key={row.monthKey} className="border-b border-ink/10">
+                              <td className="px-3 py-2 text-ink">{row.monthLabel}</td>
+                              <td className="px-3 py-2 text-ink">{formatPercent(row.rateWithoutEvents)}</td>
+                              <td className="px-3 py-2 text-ink">{formatNumber(row.traysProcessed)}</td>
+                              <td className="px-3 py-2 text-ink">{formatNumber(row.events)}</td>
+                              <td className="px-3 py-2 text-ink">{formatNumber(row.setsWithoutEvents)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </article>
 
               <article className="rounded-3xl border border-ink/10 bg-white/90 p-5 shadow-sm">
                 <h2 className="text-lg font-semibold text-ink">Quality Events by Processing Location</h2>

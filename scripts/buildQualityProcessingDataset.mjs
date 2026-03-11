@@ -34,10 +34,16 @@ const SHARED_STRING_CLOSE = '</si>'
 const TEXT_NODE_RE = /<t(?:\s+[^>]*)?>([\s\S]*?)<\/t>/g
 const ROW_NUMBER_RE = /<row[^>]*\sr="(\d+)"/
 const FACILITY_CELL_RE = /<c r="F\d+"([^>]*)>(?:<v>([^<]*)<\/v>)?<\/c>/
+const SPECIALTY_CELL_RE = /<c r="J\d+"([^>]*)>(?:<v>([^<]*)<\/v>)?<\/c>/
+const ITEM_TYPE_CELL_RE = /<c r="K\d+"([^>]*)>(?:<v>([^<]*)<\/v>)?<\/c>/
 const INV_CELL_RE = /<c r="M\d+"([^>]*)>(?:<v>([^<]*)<\/v>)?<\/c>/
+const HSYS_TAG_CELL_RE = /<c r="AF\d+"([^>]*)>(?:<v>([^<]*)<\/v>)?<\/c>/
 const DONE_LOCAL_CELL_RE = /<c r="AH\d+"[^>]*>(?:<v>([^<]*)<\/v>)?<\/c>/
 const HEADER_F_RE = /<c r="F1"[^>]*>(?:<v>([^<]*)<\/v>)?<\/c>/
+const HEADER_J_RE = /<c r="J1"[^>]*>(?:<v>([^<]*)<\/v>)?<\/c>/
+const HEADER_K_RE = /<c r="K1"[^>]*>(?:<v>([^<]*)<\/v>)?<\/c>/
 const HEADER_M_RE = /<c r="M1"[^>]*>(?:<v>([^<]*)<\/v>)?<\/c>/
+const HEADER_AF_RE = /<c r="AF1"[^>]*>(?:<v>([^<]*)<\/v>)?<\/c>/
 const HEADER_AH_RE = /<c r="AH1"[^>]*>(?:<v>([^<]*)<\/v>)?<\/c>/
 
 const log = (...messages) => {
@@ -215,6 +221,14 @@ const parseDateSerial = (value) => {
   return date.getTime() / (24 * 60 * 60 * 1000) + 25569
 }
 
+const serialToMonthKey = (serial) => {
+  const date = new Date((serial - 25569) * 24 * 60 * 60 * 1000)
+  if (Number.isNaN(date.getTime())) return null
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
 const parseQualityWorkbook = (qualityPath) => {
   log(`Reading quality workbook: ${qualityPath}`)
   const workbook = XLSX.readFile(qualityPath, { raw: true, dense: true })
@@ -294,8 +308,15 @@ const parseInventoryWorkbook = async (inventoryPath) => {
 
   const invStringIndices = []
   const facilityStringIndices = []
+  const specialtyStringIndices = []
+  const itemTypeStringIndices = []
+  const hsysTagStringIndices = []
   const doneSerials = []
   const invIndexSet = new Set()
+  const facilityIndexSet = new Set()
+  const specialtyIndexSet = new Set()
+  const itemTypeIndexSet = new Set()
+  const hsysTagIndexSet = new Set()
   const headerIndexSet = new Set()
   let parsedRows = 0
   let rowCount = 0
@@ -308,36 +329,83 @@ const parseInventoryWorkbook = async (inventoryPath) => {
 
     if (rowNumber === 1) {
       const fHeader = rowXml.match(HEADER_F_RE)?.[1]
+      const jHeader = rowXml.match(HEADER_J_RE)?.[1]
+      const kHeader = rowXml.match(HEADER_K_RE)?.[1]
       const mHeader = rowXml.match(HEADER_M_RE)?.[1]
+      const afHeader = rowXml.match(HEADER_AF_RE)?.[1]
       const ahHeader = rowXml.match(HEADER_AH_RE)?.[1]
       if (fHeader !== undefined) headerIndexSet.add(Number.parseInt(fHeader, 10))
+      if (jHeader !== undefined) headerIndexSet.add(Number.parseInt(jHeader, 10))
+      if (kHeader !== undefined) headerIndexSet.add(Number.parseInt(kHeader, 10))
       if (mHeader !== undefined) headerIndexSet.add(Number.parseInt(mHeader, 10))
+      if (afHeader !== undefined) headerIndexSet.add(Number.parseInt(afHeader, 10))
       if (ahHeader !== undefined) headerIndexSet.add(Number.parseInt(ahHeader, 10))
       return
     }
 
     rowCount += 1
 
+    const specialtyMatch = rowXml.match(SPECIALTY_CELL_RE)
+    const itemTypeMatch = rowXml.match(ITEM_TYPE_CELL_RE)
     const invMatch = rowXml.match(INV_CELL_RE)
+    const hsysTagMatch = rowXml.match(HSYS_TAG_CELL_RE)
     const facilityMatch = rowXml.match(FACILITY_CELL_RE)
     const doneLocalMatch = rowXml.match(DONE_LOCAL_CELL_RE)
-    if (!invMatch || !facilityMatch || !doneLocalMatch) return
+    if (
+      !invMatch ||
+      !facilityMatch ||
+      !doneLocalMatch ||
+      !specialtyMatch ||
+      !itemTypeMatch ||
+      !hsysTagMatch
+    ) {
+      return
+    }
 
     const invCellAttributes = invMatch[1] ?? ''
     const facilityCellAttributes = facilityMatch[1] ?? ''
-    if (!invCellAttributes.includes('t="s"') || !facilityCellAttributes.includes('t="s"')) return
+    const specialtyCellAttributes = specialtyMatch[1] ?? ''
+    const itemTypeCellAttributes = itemTypeMatch[1] ?? ''
+    const hsysTagCellAttributes = hsysTagMatch[1] ?? ''
+    if (
+      !invCellAttributes.includes('t="s"') ||
+      !facilityCellAttributes.includes('t="s"') ||
+      !specialtyCellAttributes.includes('t="s"') ||
+      !itemTypeCellAttributes.includes('t="s"') ||
+      !hsysTagCellAttributes.includes('t="s"')
+    ) {
+      return
+    }
 
     const invIndex = Number.parseInt(invMatch[2] ?? '', 10)
     const facilityIndex = Number.parseInt(facilityMatch[2] ?? '', 10)
+    const specialtyIndex = Number.parseInt(specialtyMatch[2] ?? '', 10)
+    const itemTypeIndex = Number.parseInt(itemTypeMatch[2] ?? '', 10)
+    const hsysTagIndex = Number.parseInt(hsysTagMatch[2] ?? '', 10)
     const doneSerial = Number.parseFloat(doneLocalMatch[1] ?? '')
 
-    if (!Number.isFinite(invIndex) || !Number.isFinite(facilityIndex) || !Number.isFinite(doneSerial))
+    if (
+      !Number.isFinite(invIndex) ||
+      !Number.isFinite(facilityIndex) ||
+      !Number.isFinite(specialtyIndex) ||
+      !Number.isFinite(itemTypeIndex) ||
+      !Number.isFinite(hsysTagIndex) ||
+      !Number.isFinite(doneSerial)
+    ) {
       return
+    }
 
     invStringIndices.push(invIndex)
     facilityStringIndices.push(facilityIndex)
+    specialtyStringIndices.push(specialtyIndex)
+    itemTypeStringIndices.push(itemTypeIndex)
+    hsysTagStringIndices.push(hsysTagIndex)
     doneSerials.push(doneSerial)
     invIndexSet.add(invIndex)
+    facilityIndexSet.add(facilityIndex)
+    specialtyIndexSet.add(specialtyIndex)
+    itemTypeIndexSet.add(itemTypeIndex)
+    hsysTagIndexSet.add(hsysTagIndex)
     parsedRows += 1
 
     if (rowCount % 200000 === 0) {
@@ -354,8 +422,15 @@ const parseInventoryWorkbook = async (inventoryPath) => {
   return {
     invStringIndices,
     facilityStringIndices,
+    specialtyStringIndices,
+    itemTypeStringIndices,
+    hsysTagStringIndices,
     doneSerials,
     invIndexSet,
+    facilityIndexSet,
+    specialtyIndexSet,
+    itemTypeIndexSet,
+    hsysTagIndexSet,
     headerIndexSet,
     rowCount,
     parsedRows,
@@ -406,16 +481,21 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
 
   const headerStrings = await streamSharedStrings(inventoryPath, inventoryRaw.headerIndexSet)
   const headerValues = [...headerStrings.values()]
-  const expectedHeaders = ['FacilityName', 'InvName', 'Done_Local']
+  const expectedHeaders = ['FacilityName', 'Specialty', 'ItemType', 'InvName', 'HsysTag', 'Done_Local']
   expectedHeaders.forEach((expectedHeader) => {
     if (!headerValues.includes(expectedHeader)) {
       throw new Error(
-        `Inventory workbook header validation failed. Expected header "${expectedHeader}" was not found in F/M/AH columns.`,
+        `Inventory workbook header validation failed. Expected header "${expectedHeader}" was not found.`,
       )
     }
   })
 
   const invStrings = await streamSharedStrings(inventoryPath, inventoryRaw.invIndexSet)
+  const facilityStrings = await streamSharedStrings(inventoryPath, inventoryRaw.facilityIndexSet)
+  const specialtyStrings = await streamSharedStrings(inventoryPath, inventoryRaw.specialtyIndexSet)
+  const itemTypeStrings = await streamSharedStrings(inventoryPath, inventoryRaw.itemTypeIndexSet)
+  const hsysTagStrings = await streamSharedStrings(inventoryPath, inventoryRaw.hsysTagIndexSet)
+
   const matchedInvIndexSet = new Set()
   invStrings.forEach((invName, index) => {
     if (quality.qualityInvKeys.has(normalize(invName))) {
@@ -427,7 +507,6 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
   )
 
   const inventoryByInvKey = new Map()
-  const neededFacilityIndexSet = new Set()
 
   for (let i = 0; i < inventoryRaw.invStringIndices.length; i += 1) {
     const invIndex = inventoryRaw.invStringIndices[i]
@@ -442,7 +521,6 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
       doneSerial: inventoryRaw.doneSerials[i],
       facilityIndex: inventoryRaw.facilityStringIndices[i],
     }
-    neededFacilityIndexSet.add(record.facilityIndex)
 
     const bucket = inventoryByInvKey.get(invKey)
     if (bucket) {
@@ -452,7 +530,6 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
     }
   }
 
-  const facilityStrings = await streamSharedStrings(inventoryPath, neededFacilityIndexSet)
   inventoryByInvKey.forEach((records) => {
     records.sort((left, right) => left.doneSerial - right.doneSerial)
   })
@@ -469,6 +546,31 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
   const specialtyLookup = makeLookupEncoder()
   const itemTypeLookup = makeLookupEncoder()
   const hsysTagLookup = makeLookupEncoder()
+  const monthLookup = makeLookupEncoder()
+
+  const inventoryAggregateMap = new Map()
+  for (let i = 0; i < inventoryRaw.doneSerials.length; i += 1) {
+    const monthKey = serialToMonthKey(inventoryRaw.doneSerials[i])
+    if (!monthKey) continue
+
+    const processingId = processingLookup.idFor(
+      normalizeLabel(facilityStrings.get(inventoryRaw.facilityStringIndices[i]), '(Unknown Processing Facility)'),
+    )
+    const specialtyId = specialtyLookup.idFor(
+      normalizeLabel(specialtyStrings.get(inventoryRaw.specialtyStringIndices[i])),
+    )
+    const itemTypeId = itemTypeLookup.idFor(
+      normalizeLabel(itemTypeStrings.get(inventoryRaw.itemTypeStringIndices[i])),
+    )
+    const hsysTagId = hsysTagLookup.idFor(
+      normalizeLabel(hsysTagStrings.get(inventoryRaw.hsysTagStringIndices[i])),
+    )
+    const monthId = monthLookup.idFor(monthKey)
+
+    const aggregateKey = `${monthId}|${processingId}|${specialtyId}|${itemTypeId}|${hsysTagId}`
+    inventoryAggregateMap.set(aggregateKey, (inventoryAggregateMap.get(aggregateKey) ?? 0) + 1)
+  }
+  log(`Inventory aggregates built: ${inventoryAggregateMap.size.toLocaleString()} groups`)
 
   const reportedSerials = []
   const processingFacilityIds = []
@@ -480,6 +582,12 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
   const itemTypeIds = []
   const hsysTagIds = []
   const matchedFlags = []
+  const inventoryMonthIds = []
+  const inventoryProcessingFacilityIds = []
+  const inventorySpecialtyIds = []
+  const inventoryItemTypeIds = []
+  const inventoryHsysTagIds = []
+  const inventoryCounts = []
 
   let matchedRows = 0
   let unmatchedRows = 0
@@ -518,6 +626,16 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
     }
   })
 
+  inventoryAggregateMap.forEach((count, key) => {
+    const [monthIdRaw, processingIdRaw, specialtyIdRaw, itemTypeIdRaw, hsysTagIdRaw] = key.split('|')
+    inventoryMonthIds.push(Number.parseInt(monthIdRaw ?? '', 10))
+    inventoryProcessingFacilityIds.push(Number.parseInt(processingIdRaw ?? '', 10))
+    inventorySpecialtyIds.push(Number.parseInt(specialtyIdRaw ?? '', 10))
+    inventoryItemTypeIds.push(Number.parseInt(itemTypeIdRaw ?? '', 10))
+    inventoryHsysTagIds.push(Number.parseInt(hsysTagIdRaw ?? '', 10))
+    inventoryCounts.push(count)
+  })
+
   const dataset = {
     meta: {
       generatedAt: new Date().toISOString(),
@@ -533,6 +651,7 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
       inventoryRowsScanned: inventoryRaw.rowCount,
       inventoryRowsUsable: inventoryRaw.parsedRows,
       inventoryMatchedInvKeys: inventoryByInvKey.size,
+      inventoryAggregateGroups: inventoryAggregateMap.size,
       matchedRows,
       unmatchedRows,
     },
@@ -547,6 +666,7 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
       specialties: specialtyLookup.labels,
       itemTypes: itemTypeLookup.labels,
       hsysTags: hsysTagLookup.labels,
+      months: monthLookup.labels,
     },
     rows: {
       reportedSerials,
@@ -559,6 +679,14 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
       itemTypeIds,
       hsysTagIds,
       matchedFlags,
+    },
+    inventoryAggregates: {
+      monthIds: inventoryMonthIds,
+      processingFacilityIds: inventoryProcessingFacilityIds,
+      specialtyIds: inventorySpecialtyIds,
+      itemTypeIds: inventoryItemTypeIds,
+      hsysTagIds: inventoryHsysTagIds,
+      counts: inventoryCounts,
     },
   }
 
