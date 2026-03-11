@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import InTransitDashboardApp from './apps/inTransit/InTransitDashboardApp'
 import ProcessingLocationReportApp from './apps/ProcessingLocationReportApp'
+import QualityProcessingLocationApp from './apps/QualityProcessingLocationApp'
 import RtlsAccuracyApp from './apps/RtlsAccuracyApp'
 import SpdReportCardApp from './apps/SpdReportCardApp'
 
@@ -8,6 +9,7 @@ type SuiteAppId =
   | 'spd-report-card'
   | 'processing-location'
   | 'in-transit-dashboard'
+  | 'quality-processing-location'
   | 'rtls-accuracy'
 
 type SuiteAppDefinition = {
@@ -48,6 +50,15 @@ const suiteApps: SuiteAppDefinition[] = [
     ctaLabel: 'Open app',
   },
   {
+    id: 'quality-processing-location',
+    title: 'Quality by Processing Location',
+    subtitle: 'OR event attribution to processing site',
+    description:
+      'Analyze OR quality events using the most recent prior processing record for each inventory item, with date and operational filters.',
+    status: 'Live',
+    ctaLabel: 'Open app',
+  },
+  {
     id: 'rtls-accuracy',
     title: 'RTLS Accuracy Analyzer',
     subtitle: 'ilocs vs human scan correspondence',
@@ -71,6 +82,10 @@ const App = () => {
 
   if (activeApp === 'in-transit-dashboard') {
     return <InTransitDashboardApp onBack={() => setActiveApp(null)} />
+  }
+
+  if (activeApp === 'quality-processing-location') {
+    return <QualityProcessingLocationApp onBack={() => setActiveApp(null)} />
   }
 
   if (activeApp === 'rtls-accuracy') {
