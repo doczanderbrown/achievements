@@ -768,7 +768,7 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
           {dataset ? (
             <p className="mt-4 text-xs text-muted">
               Source: {dataset.meta.sourceWorkbooks.quality} + {dataset.meta.sourceWorkbooks.inventory} | Date coverage:{' '}
-              {formatDate(dataset.minReportedSerial)} to {formatDate(dataset.maxReportedSerial)} | Generated:{' '}
+              {formatDate(dataset.minReportedSerial)} to {formatDate(dataset.maxReportedSerial)} | Data refreshed:{' '}
               {new Date(dataset.meta.generatedAt).toLocaleString('en-US')}
             </p>
           ) : null}
