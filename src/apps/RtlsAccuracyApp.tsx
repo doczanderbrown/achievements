@@ -32,6 +32,7 @@ type DrilldownState = {
 }
 
 type AreaAccuracySummary = {
+  facility: string
   location: string
   ilocsCount: number
   matchedCount: number
@@ -56,6 +57,31 @@ const slugify = (value: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
+
+const deriveFacilityFromLocation = (location: string) => {
+  const text = location.trim()
+  if (!text) return 'Unknown Facility'
+
+  const upper = text.toUpperCase()
+  if (/\bAYERS\b/.test(upper)) return 'UF Shands Ayers Pain Clinic'
+  if (/\bFSC\b/.test(upper)) return 'UF Shands FSC'
+  if (/\bHVN\b/.test(upper)) return 'UF Shands HVN'
+  if (/\bNORTH\s*TOWER\b|\bNT\b/.test(upper)) return 'UF Shands North Tower'
+  if (/\bOFFSITE\b/.test(upper)) return 'UF Shands Offsite'
+  if (/\bSOUTH\s*TOWER\b|\bST\b/.test(upper)) return 'UF Shands South Tower'
+  if (/\bOSC\b/.test(upper)) return 'UF Shands OSC'
+  if (/\bONH\b/.test(upper)) return 'UF Shands ONH'
+
+  for (const separator of [' - ', ' | ', ' / ', ': ']) {
+    const separatorIndex = text.indexOf(separator)
+    if (separatorIndex > 0) {
+      const prefix = text.slice(0, separatorIndex).trim()
+      if (prefix) return prefix
+    }
+  }
+
+  return text
+}
 
 const formatDateTime = (serial: number) => {
   if (!Number.isFinite(serial)) return '—'
@@ -156,6 +182,7 @@ const beaconNeverIlocsColumns: DrilldownColumn[] = [
 const areaEventColumns: DrilldownColumn[] = [
   { key: 'invName', label: 'Inv Name' },
   { key: 'invId', label: 'InvID' },
+  { key: 'facility', label: 'Facility' },
   { key: 'location', label: 'Location' },
   { key: 'stage', label: 'Stage' },
   { key: 'matchStatus', label: 'Match' },
@@ -177,6 +204,7 @@ const toAreaEventRows = (
     .map((event) => ({
       invName: event.invName,
       invId: event.invId,
+      facility: deriveFacilityFromLocation(event.location),
       location: event.location,
       stage: event.stage,
       matchStatus: matchedIlocsKeys.has(
@@ -367,6 +395,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
         existing.ilocsEvents.push(event)
       } else {
         areaMap.set(location, {
+          facility: deriveFacilityFromLocation(location),
           location,
           ilocsCount: 0,
           matchedCount: 0,
@@ -384,6 +413,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
         existing.matchedEvents.push(match)
       } else {
         areaMap.set(location, {
+          facility: deriveFacilityFromLocation(location),
           location,
           ilocsCount: 0,
           matchedCount: 0,
@@ -434,7 +464,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
     if (!area) return
     openDrilldown({
       title,
-      subtitle: `${area.location} accuracy ${formatPercent(area.accuracyRate)} (${area.matchedCount.toLocaleString()} matched of ${area.ilocsCount.toLocaleString()} ilocs room changes).`,
+      subtitle: `${area.facility} | ${area.location} accuracy ${formatPercent(area.accuracyRate)} (${area.matchedCount.toLocaleString()} matched of ${area.ilocsCount.toLocaleString()} ilocs room changes).`,
       columns: areaEventColumns,
       rows: toAreaEventRows(area, matchedIlocsKeySet),
     })
@@ -701,7 +731,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                 value={mostAccurateArea?.location ?? '—'}
                 hint={
                   mostAccurateArea
-                    ? `${formatPercent(mostAccurateArea.accuracyRate)} match rate (${mostAccurateArea.matchedCount.toLocaleString()}/${mostAccurateArea.ilocsCount.toLocaleString()})`
+                    ? `${mostAccurateArea.facility} | ${formatPercent(mostAccurateArea.accuracyRate)} match rate (${mostAccurateArea.matchedCount.toLocaleString()}/${mostAccurateArea.ilocsCount.toLocaleString()})`
                     : 'No ilocs area events available.'
                 }
                 onClick={
@@ -715,7 +745,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                 value={leastAccurateArea?.location ?? '—'}
                 hint={
                   leastAccurateArea
-                    ? `${formatPercent(leastAccurateArea.accuracyRate)} match rate (${leastAccurateArea.matchedCount.toLocaleString()}/${leastAccurateArea.ilocsCount.toLocaleString()})`
+                    ? `${leastAccurateArea.facility} | ${formatPercent(leastAccurateArea.accuracyRate)} match rate (${leastAccurateArea.matchedCount.toLocaleString()}/${leastAccurateArea.ilocsCount.toLocaleString()})`
                     : 'No ilocs area events available.'
                 }
                 onClick={
