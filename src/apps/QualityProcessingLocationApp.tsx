@@ -115,8 +115,18 @@ const RATE_COLOR = '#38bdf8'
 const TRAYS_COLOR = '#9ccc65'
 const EVENTS_COLOR = '#f28c28'
 const SET_ITEM_TOKENS = ['set', 'tray']
+const EASTERN_TIME_ZONE = 'America/New_York'
 
 const excelSerialToDate = (serial: number) => new Date((serial - EXCEL_OFFSET) * DAY_MS)
+const excelSerialToEasternDisplayDate = (serial: number) => {
+  const date = excelSerialToDate(serial)
+  if (Number.isNaN(date.getTime())) return null
+
+  const year = date.getUTCFullYear()
+  const month = date.getUTCMonth()
+  const day = date.getUTCDate()
+  return new Date(Date.UTC(year, month, day, 12))
+}
 
 const excelSerialToInputDate = (serial: number | null) => {
   if (serial === null || !Number.isFinite(serial)) return ''
@@ -171,13 +181,28 @@ const inputDateToExcelSerial = (value: string, endOfDay = false) => {
 
 const formatDate = (serial: number | null) => {
   if (serial === null || !Number.isFinite(serial)) return '—'
-  const date = excelSerialToDate(serial)
-  if (Number.isNaN(date.getTime())) return '—'
+  const date = excelSerialToEasternDisplayDate(serial)
+  if (!date) return '—'
   return date.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
-    timeZone: 'UTC',
+    timeZone: EASTERN_TIME_ZONE,
+  })
+}
+
+const formatEasternTimestamp = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: EASTERN_TIME_ZONE,
+    timeZoneName: 'short',
   })
 }
 
@@ -186,11 +211,11 @@ const formatMonth = (monthKey: string) => {
   const year = Number.parseInt(yearRaw ?? '', 10)
   const month = Number.parseInt(monthRaw ?? '', 10)
   if (!Number.isFinite(year) || !Number.isFinite(month)) return monthKey
-  const date = new Date(Date.UTC(year, month - 1, 1))
+  const date = new Date(Date.UTC(year, month - 1, 1, 12))
   return date.toLocaleDateString('en-US', {
     month: 'short',
     year: 'numeric',
-    timeZone: 'UTC',
+    timeZone: EASTERN_TIME_ZONE,
   })
 }
 
@@ -819,7 +844,7 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
             <p className="mt-4 text-xs text-muted">
               Source: {dataset.meta.sourceWorkbooks.quality} + {dataset.meta.sourceWorkbooks.inventory} | Date coverage:{' '}
               {formatDate(dataset.minReportedSerial)} to {formatDate(dataset.maxReportedSerial)} | Data refreshed:{' '}
-              {new Date(dataset.meta.generatedAt).toLocaleString('en-US')}
+              {formatEasternTimestamp(dataset.meta.generatedAt)}
             </p>
           ) : null}
         </header>
