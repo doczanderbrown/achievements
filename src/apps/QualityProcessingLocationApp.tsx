@@ -43,6 +43,7 @@ type QualityDataset = {
     recordedBys: string[]
     qSubTypes: string[]
     qLevels: string[]
+    invNames: string[]
     specialties: string[]
     itemTypes: string[]
     hsysTags: string[]
@@ -55,6 +56,7 @@ type QualityDataset = {
     recordedByIds: number[]
     qSubTypeIds: number[]
     qLevelIds: number[]
+    invNameIds: number[]
     specialtyIds: number[]
     itemTypeIds: number[]
     hsysTagIds: number[]
@@ -87,12 +89,14 @@ type DrilldownSubtypeRow = {
   count: number
   share: number
   topQLevel: string
-  topEventFacility: string
+  topReportingFacility: string
+  topInvName: string
 }
 
 type DrilldownEventRow = {
   reportedSerial: number
-  eventFacility: string
+  reportingFacility: string
+  invName: string
   qSubType: string
   qLevel: string
   specialty: string
@@ -636,34 +640,46 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
 
     const subtypeMap = new Map<
       number,
-      { count: number; qLevelCounts: Map<number, number>; eventFacilityCounts: Map<number, number> }
+      {
+        count: number
+        qLevelCounts: Map<number, number>
+        reportingFacilityCounts: Map<number, number>
+        invNameCounts: Map<number, number>
+      }
     >()
     const eventRows: DrilldownEventRow[] = []
 
     selectedIndices.forEach((index) => {
       const qSubTypeId = rows.qSubTypeIds[index]
       const qLevelId = rows.qLevelIds[index]
-      const eventFacilityId = rows.eventFacilityIds[index]
+      const reportingFacilityId = rows.eventFacilityIds[index]
+      const invNameId = rows.invNameIds[index]
 
       const subtypeBucket = subtypeMap.get(qSubTypeId)
       if (subtypeBucket) {
         subtypeBucket.count += 1
         subtypeBucket.qLevelCounts.set(qLevelId, (subtypeBucket.qLevelCounts.get(qLevelId) ?? 0) + 1)
-        subtypeBucket.eventFacilityCounts.set(
-          eventFacilityId,
-          (subtypeBucket.eventFacilityCounts.get(eventFacilityId) ?? 0) + 1,
+        subtypeBucket.reportingFacilityCounts.set(
+          reportingFacilityId,
+          (subtypeBucket.reportingFacilityCounts.get(reportingFacilityId) ?? 0) + 1,
+        )
+        subtypeBucket.invNameCounts.set(
+          invNameId,
+          (subtypeBucket.invNameCounts.get(invNameId) ?? 0) + 1,
         )
       } else {
         subtypeMap.set(qSubTypeId, {
           count: 1,
           qLevelCounts: new Map([[qLevelId, 1]]),
-          eventFacilityCounts: new Map([[eventFacilityId, 1]]),
+          reportingFacilityCounts: new Map([[reportingFacilityId, 1]]),
+          invNameCounts: new Map([[invNameId, 1]]),
         })
       }
 
       eventRows.push({
         reportedSerial: rows.reportedSerials[index],
-        eventFacility: lookups.eventFacilities[eventFacilityId] ?? 'Unknown',
+        reportingFacility: lookups.eventFacilities[reportingFacilityId] ?? 'Unknown',
+        invName: lookups.invNames[invNameId] ?? 'Unknown',
         qSubType: lookups.qSubTypes[qSubTypeId] ?? 'Unknown',
         qLevel: lookups.qLevels[qLevelId] ?? 'Unknown',
         specialty: lookups.specialties[rows.specialtyIds[index]] ?? 'Unknown',
@@ -682,7 +698,11 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
         count: bucket.count,
         share: selectedIndices.length > 0 ? (bucket.count / selectedIndices.length) * 100 : 0,
         topQLevel: getTopLabelFromCounts(bucket.qLevelCounts, lookups.qLevels),
-        topEventFacility: getTopLabelFromCounts(bucket.eventFacilityCounts, lookups.eventFacilities),
+        topReportingFacility: getTopLabelFromCounts(
+          bucket.reportingFacilityCounts,
+          lookups.eventFacilities,
+        ),
+        topInvName: getTopLabelFromCounts(bucket.invNameCounts, lookups.invNames),
       }))
       .sort((left, right) => right.count - left.count)
 
@@ -1109,7 +1129,8 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
                           <th className="px-3 py-2 font-semibold">Events</th>
                           <th className="px-3 py-2 font-semibold">Share</th>
                           <th className="px-3 py-2 font-semibold">Top Q Level</th>
-                          <th className="px-3 py-2 font-semibold">Top Event Facility</th>
+                          <th className="px-3 py-2 font-semibold">Top Reporting Facility</th>
+                          <th className="px-3 py-2 font-semibold">Top Inv Name</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1119,7 +1140,8 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
                             <td className="px-3 py-2 text-ink">{formatNumber(row.count)}</td>
                             <td className="px-3 py-2 text-ink">{formatPercent(row.share)}</td>
                             <td className="px-3 py-2 text-ink">{row.topQLevel}</td>
-                            <td className="px-3 py-2 text-ink">{row.topEventFacility}</td>
+                            <td className="px-3 py-2 text-ink">{row.topReportingFacility}</td>
+                            <td className="px-3 py-2 text-ink">{row.topInvName}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1155,7 +1177,8 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
                       <thead>
                         <tr className="border-b border-ink/10 text-left text-xs uppercase tracking-[0.12em] text-muted">
                           <th className="px-3 py-2 font-semibold">Reported Date</th>
-                          <th className="px-3 py-2 font-semibold">Event Facility</th>
+                          <th className="px-3 py-2 font-semibold">Reporting Facility</th>
+                          <th className="px-3 py-2 font-semibold">Inv Name</th>
                           <th className="px-3 py-2 font-semibold">Q Subtype</th>
                           <th className="px-3 py-2 font-semibold">Q Level</th>
                           <th className="px-3 py-2 font-semibold">Specialty</th>
@@ -1169,7 +1192,8 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
                         {drilldownPageRows.map((row, index) => (
                           <tr key={`${row.reportedSerial}-${index}`} className="border-b border-ink/10">
                             <td className="px-3 py-2 text-ink">{formatDate(row.reportedSerial)}</td>
-                            <td className="px-3 py-2 text-ink">{row.eventFacility}</td>
+                            <td className="px-3 py-2 text-ink">{row.reportingFacility}</td>
+                            <td className="px-3 py-2 text-ink">{row.invName}</td>
                             <td className="px-3 py-2 text-ink">{row.qSubType}</td>
                             <td className="px-3 py-2 text-ink">{row.qLevel}</td>
                             <td className="px-3 py-2 text-ink">{row.specialty}</td>

@@ -276,6 +276,7 @@ const parseQualityWorkbook = (qualityPath) => {
     events.push({
       reportedSerial: Number(reportedSerial.toFixed(8)),
       invKey,
+      invName,
       eventFacility: normalizeLabel(rawRow.FacilityName),
       recordedBy: normalizeLabel(rawRow.RecordedBy),
       qSubType: normalizeLabel(rawRow.QSubTypeName),
@@ -543,6 +544,7 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
   const recordedByLookup = makeLookupEncoder()
   const qSubTypeLookup = makeLookupEncoder()
   const qLevelLookup = makeLookupEncoder()
+  const invNameLookup = makeLookupEncoder()
   const specialtyLookup = makeLookupEncoder()
   const itemTypeLookup = makeLookupEncoder()
   const hsysTagLookup = makeLookupEncoder()
@@ -578,6 +580,7 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
   const recordedByIds = []
   const qSubTypeIds = []
   const qLevelIds = []
+  const invNameIds = []
   const specialtyIds = []
   const itemTypeIds = []
   const hsysTagIds = []
@@ -613,6 +616,7 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
     recordedByIds.push(recordedByLookup.idFor(event.recordedBy))
     qSubTypeIds.push(qSubTypeLookup.idFor(event.qSubType))
     qLevelIds.push(qLevelLookup.idFor(event.qLevel))
+    invNameIds.push(invNameLookup.idFor(event.invName))
     specialtyIds.push(specialtyLookup.idFor(event.specialty))
     itemTypeIds.push(itemTypeLookup.idFor(event.itemType))
     hsysTagIds.push(hsysTagLookup.idFor(event.hsysTag))
@@ -663,6 +667,7 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
       recordedBys: recordedByLookup.labels,
       qSubTypes: qSubTypeLookup.labels,
       qLevels: qLevelLookup.labels,
+      invNames: invNameLookup.labels,
       specialties: specialtyLookup.labels,
       itemTypes: itemTypeLookup.labels,
       hsysTags: hsysTagLookup.labels,
@@ -675,6 +680,7 @@ const buildDataset = async (qualityPath, inventoryPath, outputPath) => {
       recordedByIds,
       qSubTypeIds,
       qLevelIds,
+      invNameIds,
       specialtyIds,
       itemTypeIds,
       hsysTagIds,
