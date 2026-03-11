@@ -267,11 +267,22 @@ const QualityProcessingLocationApp = ({ onBack }: QualityProcessingLocationAppPr
       setLoading(true)
       setError(null)
       try {
-        const response = await fetch('/data/quality-by-processing-location.json')
+        const datasetUrl = `${import.meta.env.BASE_URL}data/quality-by-processing-location.json`
+        const response = await fetch(datasetUrl)
         if (!response.ok) {
-          throw new Error(`Failed to load quality dataset (${response.status})`)
+          throw new Error(
+            `Failed to load quality dataset (${response.status}) from ${datasetUrl}.`,
+          )
         }
-        const parsed = (await response.json()) as QualityDataset
+
+        const bodyText = await response.text()
+        if (bodyText.trim().startsWith('<')) {
+          throw new Error(
+            `Quality dataset URL returned HTML instead of JSON (${datasetUrl}). This usually means a base-path mismatch in deployment.`,
+          )
+        }
+
+        const parsed = JSON.parse(bodyText) as QualityDataset
         if (cancelled) return
         setDataset(parsed)
       } catch (err) {
