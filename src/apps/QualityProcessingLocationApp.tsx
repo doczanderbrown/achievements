@@ -116,6 +116,7 @@ const TRAYS_COLOR = '#9ccc65'
 const EVENTS_COLOR = '#f28c28'
 const SET_ITEM_TOKENS = ['set', 'tray']
 const EASTERN_TIME_ZONE = 'America/New_York'
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const
 
 const excelSerialToDate = (serial: number) => new Date((serial - EXCEL_OFFSET) * DAY_MS)
 const excelSerialToEasternDisplayDate = (serial: number) => {
@@ -211,12 +212,9 @@ const formatMonth = (monthKey: string) => {
   const year = Number.parseInt(yearRaw ?? '', 10)
   const month = Number.parseInt(monthRaw ?? '', 10)
   if (!Number.isFinite(year) || !Number.isFinite(month)) return monthKey
-  const date = new Date(Date.UTC(year, month - 1, 1, 12))
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    year: 'numeric',
-    timeZone: EASTERN_TIME_ZONE,
-  })
+  const label = MONTH_LABELS[month - 1]
+  if (!label) return monthKey
+  return `${label} ${year}`
 }
 
 const formatNumber = (value: number) => value.toLocaleString('en-US')
