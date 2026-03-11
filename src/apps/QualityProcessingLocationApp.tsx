@@ -129,15 +129,43 @@ const excelSerialToInputDate = (serial: number | null) => {
   return `${year}-${month}-${day}`
 }
 
+const parseInputDateParts = (value: string) => {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+
+  const parseTriplet = (left: string, middle: string, right: string) => {
+    const year = Number.parseInt(left, 10)
+    const month = Number.parseInt(middle, 10)
+    const day = Number.parseInt(right, 10)
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null
+    return { year, month, day }
+  }
+
+  if (trimmed.includes('-')) {
+    const [first, second, third] = trimmed.split('-')
+    if (first && second && third) {
+      if (first.length === 4) return parseTriplet(first, second, third)
+      if (third.length === 4) return parseTriplet(third, first, second)
+    }
+  }
+
+  if (trimmed.includes('/')) {
+    const [first, second, third] = trimmed.split('/')
+    if (first && second && third) {
+      if (third.length === 4) return parseTriplet(third, first, second)
+      if (first.length === 4) return parseTriplet(first, second, third)
+    }
+  }
+
+  return null
+}
+
 const inputDateToExcelSerial = (value: string, endOfDay = false) => {
   if (!value) return null
-  const [yearRaw, monthRaw, dayRaw] = value.split('-')
-  const year = Number.parseInt(yearRaw ?? '', 10)
-  const month = Number.parseInt(monthRaw ?? '', 10)
-  const day = Number.parseInt(dayRaw ?? '', 10)
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null
+  const parsed = parseInputDateParts(value)
+  if (!parsed) return null
 
-  const utc = Date.UTC(year, month - 1, day) / DAY_MS + EXCEL_OFFSET
+  const utc = Date.UTC(parsed.year, parsed.month - 1, parsed.day) / DAY_MS + EXCEL_OFFSET
   return endOfDay ? utc + 0.999999 : utc
 }
 
@@ -149,6 +177,7 @@ const formatDate = (serial: number | null) => {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    timeZone: 'UTC',
   })
 }
 
@@ -161,6 +190,7 @@ const formatMonth = (monthKey: string) => {
   return date.toLocaleDateString('en-US', {
     month: 'short',
     year: 'numeric',
+    timeZone: 'UTC',
   })
 }
 
