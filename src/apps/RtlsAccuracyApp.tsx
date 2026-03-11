@@ -1,16 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import type {
   RtlsAnalysisConfig,
   RtlsAnalysisResult,
   RtlsEventDetail,
   RtlsMatchDetail,
-  RtlsParseProgress,
   RtlsScanDataset,
   RtlsTransitionDetail,
 } from './rtlsAccuracy/types'
 import { analyzeRtlsDataset } from './rtlsAccuracy/utils/analyzeRtlsDataset'
-import { parseRtlsScanWorkbook } from './rtlsAccuracy/utils/parseRtlsScanWorkbook'
 
 type RtlsAccuracyAppProps = {
   onBack?: () => void
@@ -39,6 +37,43 @@ type AreaAccuracySummary = {
   accuracyRate: number
   ilocsEvents: RtlsEventDetail[]
   matchedEvents: RtlsMatchDetail[]
+}
+
+type RtlsDatasetPayload = {
+  meta: {
+    generatedAt: string
+    sourceWorkbook: string
+    scanSheet: string
+    beaconSheet: string | null
+    parsedRows: number
+    rawParsedRows: number
+    beaconFilterApplied: boolean
+    beaconedAssetsCount: number
+    excludedNonBeaconRows: number
+  }
+  config: RtlsAnalysisConfig
+  dataset: {
+    rows: {
+      invKeys: number[]
+      invNameKeys: number[]
+      locationKeys: number[]
+      aliasUserKeys: number[]
+      userKeys: number[]
+      stateKeys: number[]
+      substateKeys: number[]
+      workflowKeys: number[]
+      timestampSerials: number[]
+    }
+    sharedLookupEntries: Array<[number, string]>
+    rawValueLookup: string[]
+    parsedRows: number
+    rawParsedRows: number
+    beaconFilterApplied: boolean
+    beaconedAssetsCount: number
+    beaconedInvNames: string[]
+    excludedNonBeaconRows: number
+    excludedInvNameSummaries: Array<{ invName: string; count: number }>
+  }
 }
 
 const DEFAULT_CONFIG: RtlsAnalysisConfig = {
@@ -264,55 +299,102 @@ const toTransitionRows = (transitions: RtlsTransitionDetail[]): DrilldownRow[] =
     }))
 }
 
+const hydrateDataset = (payload: RtlsDatasetPayload['dataset']): RtlsScanDataset => {
+  return {
+    rows: {
+      invKeys: Int32Array.from(payload.rows.invKeys),
+      invNameKeys: Int32Array.from(payload.rows.invNameKeys),
+      locationKeys: Int32Array.from(payload.rows.locationKeys),
+      aliasUserKeys: Int32Array.from(payload.rows.aliasUserKeys),
+      userKeys: Int32Array.from(payload.rows.userKeys),
+      stateKeys: Int32Array.from(payload.rows.stateKeys),
+      substateKeys: Int32Array.from(payload.rows.substateKeys),
+      workflowKeys: Int32Array.from(payload.rows.workflowKeys),
+      timestampSerials: Float64Array.from(payload.rows.timestampSerials),
+    },
+    sharedLookup: new Map(payload.sharedLookupEntries),
+    rawValueLookup: payload.rawValueLookup,
+    parsedRows: payload.parsedRows,
+    rawParsedRows: payload.rawParsedRows,
+    beaconFilterApplied: payload.beaconFilterApplied,
+    beaconedAssetsCount: payload.beaconedAssetsCount,
+    beaconedInvNames: payload.beaconedInvNames,
+    excludedNonBeaconRows: payload.excludedNonBeaconRows,
+    excludedInvNameSummaries: payload.excludedInvNameSummaries,
+  }
+}
+
 const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
   const [dataset, setDataset] = useState<RtlsScanDataset | null>(null)
+  const [sourceMeta, setSourceMeta] = useState<RtlsDatasetPayload['meta'] | null>(null)
   const [analysis, setAnalysis] = useState<RtlsAnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [fileName, setFileName] = useState<string>('')
   const [config, setConfig] = useState<RtlsAnalysisConfig>(DEFAULT_CONFIG)
+  const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [progress, setProgress] = useState<RtlsParseProgress | null>(null)
   const [drilldown, setDrilldown] = useState<DrilldownState | null>(null)
   const [drillSearch, setDrillSearch] = useState('')
   const [drillPage, setDrillPage] = useState(1)
 
   const runAnalysis = async (sourceDataset: RtlsScanDataset, nextConfig: RtlsAnalysisConfig) => {
     setBusy(true)
-    setProgress({
-      phase: 'complete',
-      message: 'Analyzing ilocs vs human correspondence and path transitions...',
-      rowsParsed: sourceDataset.parsedRows,
-    })
     await new Promise((resolve) => setTimeout(resolve, 0))
     const computed = analyzeRtlsDataset(sourceDataset, nextConfig)
     setAnalysis(computed)
     setBusy(false)
   }
 
-  const handleFileUpload = async (file: File | null) => {
-    if (!file) return
-    setError(null)
-    setFileName(file.name)
-    setDataset(null)
-    setAnalysis(null)
-    setDrilldown(null)
-    setBusy(true)
+  useEffect(() => {
+    let cancelled = false
 
-    try {
-      const parsed = await parseRtlsScanWorkbook(file, (nextProgress) => {
-        setProgress(nextProgress)
-      })
-      setDataset(parsed)
-      await runAnalysis(parsed, config)
-    } catch (uploadError) {
-      setError(
-        uploadError instanceof Error
-          ? uploadError.message
-          : 'Unable to parse the scan workbook. Confirm it is a valid .xlsx export.',
-      )
-      setBusy(false)
+    const loadDataset = async () => {
+      setLoading(true)
+      setError(null)
+      setAnalysis(null)
+      setDataset(null)
+      setSourceMeta(null)
+      setDrilldown(null)
+
+      try {
+        const datasetUrl = `${import.meta.env.BASE_URL}data/rtls-accuracy-dataset.json`
+        const response = await fetch(datasetUrl)
+        if (!response.ok) {
+          throw new Error(`Failed to load RTLS dataset (${response.status}) from ${datasetUrl}.`)
+        }
+
+        const bodyText = await response.text()
+        if (bodyText.trim().startsWith('<')) {
+          throw new Error(
+            `RTLS dataset URL returned HTML instead of JSON (${datasetUrl}). This usually means a base-path mismatch in deployment.`,
+          )
+        }
+
+        const parsedPayload = JSON.parse(bodyText) as RtlsDatasetPayload
+        if (cancelled) return
+
+        const nextConfig = parsedPayload.config ?? DEFAULT_CONFIG
+        const hydrated = hydrateDataset(parsedPayload.dataset)
+        setSourceMeta(parsedPayload.meta)
+        setConfig(nextConfig)
+        setDataset(hydrated)
+        await runAnalysis(hydrated, nextConfig)
+      } catch (loadError) {
+        if (cancelled) return
+        setError(
+          loadError instanceof Error ? loadError.message : 'Unable to load hardcoded RTLS dataset.',
+        )
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
     }
-  }
+
+    loadDataset()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const reanalyze = async () => {
     if (!dataset) return
@@ -511,7 +593,7 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
 
       <main className="relative mx-auto flex max-w-7xl flex-col gap-6 px-6 py-8">
         <header className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div className="flex flex-col gap-5">
             <div>
               {onBack ? (
                 <button
@@ -529,20 +611,18 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                 RTLS Accuracy Analyzer
               </h1>
               <p className="mt-3 max-w-3xl text-sm text-muted">
-                Upload the scan history export, detect ilocs and human room-change events by
-                `InvID`, match them within a time window, and inspect ilocs path transitions.
+                Hardcoded scan-history data is analyzed by `InvID` to compare ilocs vs human
+                room-change events, match them within a configurable lag window, and inspect ilocs
+                path transitions.
               </p>
+              {sourceMeta ? (
+                <p className="mt-2 text-xs text-muted">
+                  Source workbook: {sourceMeta.sourceWorkbook} | Sheets: {sourceMeta.scanSheet}
+                  {sourceMeta.beaconSheet ? ` + ${sourceMeta.beaconSheet}` : ''} | Data refreshed:{' '}
+                  {new Date(sourceMeta.generatedAt).toLocaleString('en-US')}
+                </p>
+              ) : null}
             </div>
-
-            <label className="inline-flex cursor-pointer items-center justify-center rounded-full border border-brand/40 bg-brand px-5 py-3 text-sm font-semibold text-white transition hover:bg-brand/90">
-              Upload Scan Export (.xlsx)
-              <input
-                type="file"
-                accept=".xlsx"
-                className="hidden"
-                onChange={(event) => handleFileUpload(event.target.files?.[0] ?? null)}
-              />
-            </label>
           </div>
         </header>
 
@@ -611,10 +691,17 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted">
-            <span className="rounded-full border border-ink/15 px-3 py-1">File: {fileName || 'None'}</span>
+            <span className="rounded-full border border-ink/15 px-3 py-1">
+              Source: {sourceMeta?.sourceWorkbook ?? 'Loading hardcoded dataset...'}
+            </span>
             <span className="rounded-full border border-ink/15 px-3 py-1">
               Rows analyzed: {analysis?.parsedRows.toLocaleString() ?? 0}
             </span>
+            {sourceMeta ? (
+              <span className="rounded-full border border-ink/15 px-3 py-1">
+                Raw rows: {sourceMeta.rawParsedRows.toLocaleString()}
+              </span>
+            ) : null}
             {analysis?.beaconFilterApplied ? (
               <>
                 <span className="rounded-full border border-ink/15 px-3 py-1">
@@ -628,9 +715,9 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
                 </span>
               </>
             ) : null}
-            {progress ? (
+            {loading ? (
               <span className="rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-ink">
-                {progress.message}
+                Loading hardcoded RTLS dataset...
               </span>
             ) : null}
             {busy ? (
@@ -972,7 +1059,9 @@ const RtlsAccuracyApp = ({ onBack }: RtlsAccuracyAppProps) => {
           </>
         ) : (
           <section className="rounded-3xl border border-ink/10 bg-white/90 p-8 text-sm text-muted shadow-sm">
-            Upload a scan-history workbook to generate RTLS correspondence and path analytics.
+            {loading
+              ? 'Loading hardcoded RTLS workbook dataset...'
+              : 'RTLS dataset is unavailable. Refresh or verify data/rtls-accuracy-dataset.json is deployed.'}
           </section>
         )}
       </main>
