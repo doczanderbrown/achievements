@@ -8,9 +8,9 @@ import { PDFDocument } from 'pdf-lib'
 const app = express()
 const port = Number(process.env.PORT ?? 3001)
 const maxCards = Number(process.env.PDF_MAX_CARDS ?? 250)
-const pageWidth = 595.28
-const pageHeight = 841.89
-const margin = 24
+const pageWidth = 792
+const pageHeight = 612
+const margin = 16
 const uploadDir = path.join(os.tmpdir(), 'achievements-pdf-api')
 
 await fs.mkdir(uploadDir, { recursive: true })
@@ -42,7 +42,7 @@ const sanitizePdfFileName = (value) => {
   return cleaned.toLowerCase().endsWith('.pdf') ? cleaned : `${cleaned}.pdf`
 }
 
-const drawImageOnA4Page = (pdfDoc, image) => {
+const drawImageOnPage = (pdfDoc, image) => {
   const page = pdfDoc.addPage([pageWidth, pageHeight])
   const maxWidth = pageWidth - margin * 2
   const maxHeight = pageHeight - margin * 2
@@ -80,12 +80,12 @@ app.post('/api/report-cards/pdf', upload.array('cards', maxCards), async (req, r
 
       if (file.mimetype === 'image/png') {
         const image = await pdfDoc.embedPng(fileBuffer)
-        drawImageOnA4Page(pdfDoc, image)
+        drawImageOnPage(pdfDoc, image)
         continue
       }
       if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg') {
         const image = await pdfDoc.embedJpg(fileBuffer)
-        drawImageOnA4Page(pdfDoc, image)
+        drawImageOnPage(pdfDoc, image)
       }
     }
 

@@ -5,6 +5,7 @@ import { DAY_MS, formatDateTime, formatDuration, HOUR_MS } from '../utils/age';
 import { normalizeDestination } from '../utils/destination';
 import FlowIndicator from './FlowIndicator';
 import TabButton from './TabButton';
+import TransitRadarMap from './TransitRadarMap';
 
 type TransitBoardProps = {
   items: InventoryItem[];
@@ -14,6 +15,7 @@ type TransitBoardProps = {
 type CardSort = 'ageAsc' | 'ageDesc' | 'tower' | 'desc';
 
 type TransitTab = 'flowing' | 'stuck';
+type TransitSurface = 'board' | 'radar';
 
 const bucketBadge = (bucket: string) => {
   switch (bucket) {
@@ -44,6 +46,7 @@ const TransitBoard = ({ items, stuckThresholdHours }: TransitBoardProps) => {
   const stuckThresholdMs = stuckThresholdHours * HOUR_MS;
   const [cardSort, setCardSort] = useState<CardSort>('ageAsc');
   const [viewTab, setViewTab] = useState<TransitTab>('flowing');
+  const [surfaceView, setSurfaceView] = useState<TransitSurface>('board');
 
   const stuckItems = useMemo(
     () => items.filter((item) => item.ageMs !== null && item.ageMs >= stuckThresholdMs),
@@ -107,115 +110,133 @@ const TransitBoard = ({ items, stuckThresholdHours }: TransitBoardProps) => {
               Stuck ({stuckItems.length})
             </TabButton>
           </div>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
+            <TabButton active={surfaceView === 'board'} onClick={() => setSurfaceView('board')}>
+              Board
+            </TabButton>
+            <TabButton active={surfaceView === 'radar'} onClick={() => setSurfaceView('radar')}>
+              Flight Radar
+            </TabButton>
+          </div>
           <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted">
             <span className="rounded-full border border-stroke bg-white px-3 py-1">
               Stuck ≥ {stuckThresholdHours}h
             </span>
-            <div className="flex items-center gap-2">
-              <span>Sort</span>
-              <select
-                value={cardSort}
-                onChange={(event) => setCardSort(event.target.value as CardSort)}
-                className="rounded-full border border-stroke bg-white px-3 py-1 text-[11px]"
-              >
-                <option value="ageAsc">Age: youngest to oldest</option>
-                <option value="ageDesc">Age: oldest to youngest</option>
-                <option value="tower">Owning tower A-Z</option>
-                <option value="desc">Description A-Z</option>
-              </select>
-            </div>
+            {surfaceView === 'board' ? (
+              <div className="flex items-center gap-2">
+                <span>Sort</span>
+                <select
+                  value={cardSort}
+                  onChange={(event) => setCardSort(event.target.value as CardSort)}
+                  className="rounded-full border border-stroke bg-white px-3 py-1 text-[11px]"
+                >
+                  <option value="ageAsc">Age: youngest to oldest</option>
+                  <option value="ageDesc">Age: oldest to youngest</option>
+                  <option value="tower">Owning tower A-Z</option>
+                  <option value="desc">Description A-Z</option>
+                </select>
+              </div>
+            ) : (
+              <span className="rounded-full border border-stroke bg-white px-3 py-1">
+                Gainesville map + zoom
+              </span>
+            )}
           </div>
         </div>
       </section>
 
-      <section className="rounded-3xl border border-stroke bg-card/90 p-4 shadow-soft">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.3em] text-muted">In Transit Board</div>
-            <div className="mt-1 text-sm text-muted">Grouped by destination</div>
+      {surfaceView === 'board' ? (
+        <section className="rounded-3xl border border-stroke bg-card/90 p-4 shadow-soft">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.3em] text-muted">In Transit Board</div>
+              <div className="mt-1 text-sm text-muted">Grouped by destination</div>
+            </div>
+            <div className="text-xs text-muted">Sorted by selection</div>
           </div>
-          <div className="text-xs text-muted">Sorted by selection</div>
-        </div>
-        {columns.length === 0 ? (
-          <div className="mt-6 rounded-2xl border border-dashed border-stroke bg-slate-50 p-8 text-center text-sm text-muted">
-            {viewTab === 'stuck'
-              ? 'No stuck items match the current filters.'
-              : 'Upload a workbook to view the transit board.'}
-          </div>
-        ) : (
-          <div className="mt-4 flex gap-4 overflow-x-auto pb-2">
-            {columns.map((column) => (
-              <div key={column.key} className="min-w-[280px] flex-1">
-                <div className="flex items-center justify-between rounded-2xl border border-stroke bg-orange-50 px-3 py-2">
-                  <div className="text-sm font-semibold text-ink">{column.key}</div>
-                  <div className="text-xs text-muted">{column.items.length}</div>
+          {columns.length === 0 ? (
+            <div className="mt-6 rounded-2xl border border-dashed border-stroke bg-slate-50 p-8 text-center text-sm text-muted">
+              {viewTab === 'stuck'
+                ? 'No stuck items match the current filters.'
+                : 'Upload a workbook to view the transit board.'}
+            </div>
+          ) : (
+            <div className="mt-4 flex gap-4 overflow-x-auto pb-2">
+              {columns.map((column) => (
+                <div key={column.key} className="min-w-[280px] flex-1">
+                  <div className="flex items-center justify-between rounded-2xl border border-stroke bg-orange-50 px-3 py-2">
+                    <div className="text-sm font-semibold text-ink">{column.key}</div>
+                    <div className="text-xs text-muted">{column.items.length}</div>
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {column.items.map((item, index) => (
+                      <div
+                        key={`${item.sheetType}-${item.invID}-${item.lastScanLoc}-${index}`}
+                        className="card-hover rounded-2xl border border-stroke bg-white p-3 shadow-soft"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="line-clamp-2 text-sm font-semibold text-ink">
+                            {item.desc || 'No description'}
+                          </div>
+                          <span className={`rounded-full px-2 py-1 text-xs font-semibold ${bucketBadge(item.ageBucket)}`}>
+                            {item.ageBucket}
+                          </span>
+                        </div>
+                        <div className="mt-3 flex items-center justify-between">
+                          <span className="rounded-full border border-stroke px-2 py-1 text-[11px] font-semibold text-ink">
+                            {item.owningTower}
+                          </span>
+                          <span className="text-xs text-muted">
+                            {formatDuration(item.ageMs, item.lastScanAgoRaw)}
+                          </span>
+                        </div>
+                        {item.caseCartName ? (
+                          <div className="mt-2 text-[11px] text-muted">
+                            On <span className="font-semibold text-ink">{item.caseCartName}</span>
+                          </div>
+                        ) : item.transportCartName ? (
+                          <div className="mt-2 text-[11px] text-muted">
+                            On <span className="font-semibold text-ink">{item.transportCartName}</span>
+                          </div>
+                        ) : null}
+                        {item.dispatchDestination || item.caseCartFacility ? (
+                          <div className="mt-1 text-[11px] text-muted">
+                            {item.dispatchDestination ? (
+                              <>
+                                Dispatch to <span className="font-semibold text-ink">{item.dispatchDestination}</span>
+                              </>
+                            ) : (
+                              'Dispatch target unknown'
+                            )}
+                            {item.caseCartFacility ? (
+                              <>
+                                {' '}
+                                from <span className="font-semibold text-ink">{item.caseCartFacility}</span>
+                              </>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <div className="mt-3">
+                          <FlowIndicator
+                            mode="transit"
+                            fromLabel={item.fromFacility || 'Unknown'}
+                            toLabel={normalizeDestination(item.toLocation ?? '')}
+                          />
+                        </div>
+                        <div className="mt-2 text-xs text-muted">
+                          {formatDateTime(item.lastScanAt)} - {item.lastScanBy || 'Unknown'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="mt-3 space-y-3">
-                  {column.items.map((item, index) => (
-                    <div
-                      key={`${item.sheetType}-${item.invID}-${item.lastScanLoc}-${index}`}
-                      className="card-hover rounded-2xl border border-stroke bg-white p-3 shadow-soft"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="line-clamp-2 text-sm font-semibold text-ink">
-                          {item.desc || 'No description'}
-                        </div>
-                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${bucketBadge(item.ageBucket)}`}>
-                          {item.ageBucket}
-                        </span>
-                      </div>
-                      <div className="mt-3 flex items-center justify-between">
-                        <span className="rounded-full border border-stroke px-2 py-1 text-[11px] font-semibold text-ink">
-                          {item.owningTower}
-                        </span>
-                        <span className="text-xs text-muted">
-                          {formatDuration(item.ageMs, item.lastScanAgoRaw)}
-                        </span>
-                      </div>
-                      {item.caseCartName ? (
-                        <div className="mt-2 text-[11px] text-muted">
-                          On <span className="font-semibold text-ink">{item.caseCartName}</span>
-                        </div>
-                      ) : item.transportCartName ? (
-                        <div className="mt-2 text-[11px] text-muted">
-                          On <span className="font-semibold text-ink">{item.transportCartName}</span>
-                        </div>
-                      ) : null}
-                      {item.dispatchDestination || item.caseCartFacility ? (
-                        <div className="mt-1 text-[11px] text-muted">
-                          {item.dispatchDestination ? (
-                            <>
-                              Dispatch to <span className="font-semibold text-ink">{item.dispatchDestination}</span>
-                            </>
-                          ) : (
-                            'Dispatch target unknown'
-                          )}
-                          {item.caseCartFacility ? (
-                            <>
-                              {' '}
-                              from <span className="font-semibold text-ink">{item.caseCartFacility}</span>
-                            </>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      <div className="mt-3">
-                        <FlowIndicator
-                          mode="transit"
-                          fromLabel={item.fromFacility || 'Unknown'}
-                          toLabel={normalizeDestination(item.toLocation ?? '')}
-                        />
-                      </div>
-                      <div className="mt-2 text-xs text-muted">
-                        {formatDateTime(item.lastScanAt)} - {item.lastScanBy || 'Unknown'}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : (
+        <TransitRadarMap items={boardItems} stuckThresholdHours={stuckThresholdHours} />
+      )}
 
       <section className="rounded-3xl border border-stroke bg-card/90 p-4 text-sm text-muted shadow-soft">
         Aging rule: items age based on LastScanAt. If missing, LastScanAgo is shown for display only.

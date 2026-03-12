@@ -137,6 +137,7 @@ const getUserKey = (user: UserRecord) => {
 const EXPORT_RENDER_SCALE = 1.35
 const EXPORT_YIELD_EVERY = 4
 const EXPORT_JPEG_QUALITY = 0.82
+const EXPORT_CARD_WIDTH_PX = 1100
 
 const formatOrdinal = (value: number) => {
   const rounded = Math.round(value)
@@ -383,10 +384,10 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
   }
 
   const exportCardsToPdfClient = async (users: UserRecord[], cardMap: Map<string, HTMLElement>) => {
-    const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' })
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
-    const margin = 24
+    const margin = 16
     const maxWidth = pageWidth - margin * 2
     const maxHeight = pageHeight - margin * 2
 
@@ -1190,7 +1191,8 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                 key={`export-${key}`}
                 data-report-card
                 data-report-card-key={key}
-                className="w-[520px] pb-6"
+                className="pb-6"
+                style={{ width: `${EXPORT_CARD_WIDTH_PX}px` }}
               >
                 <ReportCard
                   user={user}

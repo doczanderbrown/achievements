@@ -137,3 +137,56 @@
     opacity: 0;
   }
 }
+
+.radar-map-shell {
+  overflow: hidden;
+}
+
+.radar-map {
+  width: 100%;
+  height: 520px;
+}
+
+@media (max-width: 768px) {
+  .radar-map {
+    height: 400px;
+  }
+}
+
+.radar-map .leaflet-tile {
+  filter: saturate(0.6) contrast(1.05);
+}
+
+.radar-plane-icon {
+  background: transparent;
+  border: 0;
+}
+
+.radar-plane {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  transform-origin: center;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.2);
+}
+
+.radar-plane--flowing {
+  color: rgb(2, 132, 199);
+  border: 1px solid rgba(2, 132, 199, 0.45);
+  background: rgba(224, 242, 254, 0.95);
+}
+
+.radar-plane--stuck {
+  color: rgb(194, 65, 12);
+  border: 1px solid rgba(194, 65, 12, 0.45);
+  background: rgba(255, 237, 213, 0.95);
+}
+
+.radar-plane--selected {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.28), 0 10px 18px rgba(15, 23, 42, 0.25);
+}
