@@ -79,6 +79,19 @@ Large SPD report-card exports can be generated server-side through:
 - `GET /api/health`
 - `POST /api/report-cards/pdf` (`multipart/form-data`, field name: `cards`)
 
+## SPD History API (Postgres)
+
+SPD workbook history and user trend data are persisted in Postgres through:
+
+- `GET /api/spd-history/status`
+- `POST /api/spd-history/workbook` (`application/json`)
+- `GET /api/spd-history/user-trend?userId=<id>&userName=<name>`
+- `GET /api/spd-history/periods`
+
+Persistence requires `DATABASE_URL` on the API container/process.
+The default `docker-compose.yml` now includes a `postgres` service and wires
+`pdf-api` to it automatically.
+
 Local development:
 
 ```bash

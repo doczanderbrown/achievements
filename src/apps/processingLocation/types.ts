@@ -71,4 +71,6 @@ export type ProcessingLocationDataset = {
   matchedRows: number
   unmatchedRows: number
   caseRouting: CaseRoutingDataset | null
+  facilityOptions: FilterOption[]
+  isEndeavorFormat: boolean
 }

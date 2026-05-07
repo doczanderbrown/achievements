@@ -5,6 +5,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Legend,
   ResponsiveContainer,
   Tooltip,
@@ -15,12 +16,13 @@ import * as XLSX from 'xlsx'
 import type { FilterOption, ParseProgress, ProcessingLocationDataset } from './processingLocation/types'
 import { parseProcessingLocationWorkbook } from './processingLocation/utils/parseProcessingLocationWorkbook'
 import { parseCaseRoutingWorkbook } from './processingLocation/utils/parseCaseRoutingWorkbook'
+import { parseEndeavorWorkbook } from './processingLocation/utils/parseEndeavorWorkbook'
 
 type ProcessingLocationReportAppProps = {
   onBack?: () => void
 }
 
-type DashboardTab = 'mix' | 'no-go' | 'case-routing'
+type DashboardTab = 'mix' | 'no-go' | 'case-routing' | 'dept-mix'
 type DrilldownChart = 'mix' | 'no-go' | 'go'
 type DrilldownSegment = 'onsite' | 'offsite'
 type DrilldownSelection = {
@@ -49,6 +51,17 @@ const DAY_ORDER: Array<{ key: number; label: string }> = [
   { key: 1, label: 'Sun' },
 ]
 const DAY_LABEL_BY_KEY = new Map(DAY_ORDER.map((day) => [day.key, day.label]))
+
+const isPrimaryDept = (name: string) => {
+  const n = name.trim().toLowerCase()
+  return (
+    n.includes('main or') ||
+    n === 'dsc' ||
+    n.includes('sterile processing') ||
+    n.includes('main spd') ||
+    n.includes('highland park main or')
+  )
+}
 const CASE_ROUTE_LABEL_BY_ID = new Map<number, string>([
   [0, 'HVN On-Site'],
   [1, 'Off-Site'],
@@ -114,18 +127,20 @@ const formatPercentSmart = (value: number) => {
 const formatTooltipPercent = (value: number | string | undefined) =>
   formatPercentSmart(Number(value ?? 0))
 
-const getDrilldownSegmentLabel = (selection: DrilldownSelection) => {
+const getDrilldownSegmentLabel = (selection: DrilldownSelection, isEndeavor = false) => {
+  const leaveTag = isEndeavor ? 'Cross-Site' : 'Off-Site'
+  const stayTag = isEndeavor ? 'Same-Site' : 'On-Site'
   if (selection.chart === 'mix') {
-    return selection.segment === 'offsite' ? 'Leave (Off-Site)' : 'Stay (On-Site)'
+    return selection.segment === 'offsite' ? `Leave (${leaveTag})` : `Stay (${stayTag})`
   }
   if (selection.chart === 'no-go') {
     return selection.segment === 'offsite'
-      ? 'No-Go Exception (Off-Site)'
-      : 'No-Go Compliant (On-Site)'
+      ? `No-Go Exception (${leaveTag})`
+      : `No-Go Compliant (${stayTag})`
   }
   return selection.segment === 'offsite'
-    ? 'Go Compliant (Off-Site)'
-    : 'Go Stayed On-Site'
+    ? `Go Compliant (${leaveTag})`
+    : `Go Stayed ${stayTag}`
 }
 
 const getCaseDrilldownSegmentLabel = (selection: CaseDrilldownSelection) => {
@@ -216,6 +231,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
   const [includeHvnDispatch, setIncludeHvnDispatch] = useState(true)
   const [includeOffsiteDispatch, setIncludeOffsiteDispatch] = useState(true)
   const [includeOtherOnsiteDispatch, setIncludeOtherOnsiteDispatch] = useState(true)
+  const [selectedFacilities, setSelectedFacilities] = useState<number[]>([])
   const [activeTab, setActiveTab] = useState<DashboardTab>('mix')
   const [drilldown, setDrilldown] = useState<DrilldownSelection | null>(null)
   const [drilldownPage, setDrilldownPage] = useState(1)
@@ -287,16 +303,26 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
     setProgress({ phase: 'sheets', message: 'Starting workbook parse...' })
 
     try {
-      const parsed = await parseProcessingLocationWorkbook(file, (nextProgress) => {
-        setProgress(nextProgress)
+      const buffer = await file.arrayBuffer()
+      const wbMeta = XLSX.read(buffer, { bookSheets: true })
+      const endeavor = wbMeta.SheetNames.some((n) => {
+        const lower = n.toLowerCase()
+        return lower === 'processing data' || lower === 'data'
       })
-      setProgress({
-        phase: 'joining',
-        message: 'Correlating case routing data (Cases -> Inventory -> Loads)...',
-      })
-      const caseRouting = await parseCaseRoutingWorkbook(file, (nextProgress) => {
-        setProgress(nextProgress)
-      })
+      let parsed: ProcessingLocationDataset
+      let caseRouting = null
+
+      if (endeavor) {
+        parsed = await parseEndeavorWorkbook(file, (p) => setProgress(p))
+      } else {
+        parsed = await parseProcessingLocationWorkbook(file, (nextProgress) => {
+          setProgress(nextProgress)
+        })
+        setProgress({ phase: 'joining', message: 'Correlating case routing data...' })
+        caseRouting = await parseCaseRoutingWorkbook(file, (nextProgress) => {
+          setProgress(nextProgress)
+        })
+      }
 
       const combinedMinDate = [parsed.minDateSerial, caseRouting?.minCaseDateSerial ?? null].reduce<
         number | null
@@ -327,14 +353,21 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       setSelectedCaseFacilities([])
       setSelectedCaseItemTypes([])
       setSelectedCaseCategories([])
+      setSelectedFacilities([])
       setIncludeOnsite(true)
       setIncludeOffsite(true)
       setIncludeHvnDispatch(true)
       setIncludeOffsiteDispatch(true)
       setIncludeOtherOnsiteDispatch(true)
       setActiveTab(
-        merged.rows.dateSerials.length > 0 ? 'mix' : merged.caseRouting ? 'case-routing' : 'mix',
+        endeavor ? 'dept-mix' : (merged.rows.dateSerials.length > 0 ? 'mix' : merged.caseRouting ? 'case-routing' : 'mix'),
       )
+      if (endeavor && merged.facilityOptions.length > 0) {
+        const nchIds = merged.facilityOptions
+          .filter((o) => o.label.toLowerCase().includes('nch'))
+          .map((o) => o.id)
+        setSelectedFacilities(nchIds)
+      }
       setDrilldown(null)
       setDrilldownPage(1)
       setCaseDrilldown(null)
@@ -463,6 +496,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       selectedSpecialties.length > 0 ? new Set(selectedSpecialties) : null
     const itemTypeSet = selectedItemTypes.length > 0 ? new Set(selectedItemTypes) : null
     const ownerSet = selectedOwners.length > 0 ? new Set(selectedOwners) : null
+    const facilitySet = selectedFacilities.length > 0 ? new Set(selectedFacilities) : null
 
     const dayBuckets: Record<
       number,
@@ -508,6 +542,9 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
 
       const ownerId = dataset.rows.ownerIds[i]
       if (ownerSet && !ownerSet.has(ownerId)) continue
+
+      const facilityId = dataset.rows.facilityIds[i]
+      if (facilitySet && !facilitySet.has(facilityId)) continue
 
       const dayOfWeek = dataset.rows.dayOfWeek[i]
       if (!dayBuckets[dayOfWeek]) continue
@@ -645,10 +682,104 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
     selectedOwners,
     selectedSpecialties,
     selectedItemTypes,
+    selectedFacilities,
     includeOnsite,
     includeOffsite,
     dateRangeSerials,
   ])
+
+  const deptMixAnalytics = useMemo(() => {
+    if (!dataset?.isEndeavorFormat || !dateRangeSerials) return null
+
+    const facilitySet = selectedFacilities.length > 0 ? new Set(selectedFacilities) : null
+    const ownerLabels = new Map(dataset.owners.map((o) => [o.id, o.label]))
+
+    const facilityCounts = new Map<number, Map<number, number>>()
+    // setNameId → { total, depts: Map<ownerId, count> }
+    const overallOtherItemMap = new Map<number, { total: number; depts: Map<number, number> }>()
+    // facilityId → setNameId → { total, depts }
+    const facilityOtherItemMap = new Map<number, Map<number, { total: number; depts: Map<number, number> }>>()
+
+    for (let i = 0; i < dataset.rows.dateSerials.length; i += 1) {
+      const dateSerial = dataset.rows.dateSerials[i]
+      if (dateSerial < dateRangeSerials.startSerial || dateSerial > dateRangeSerials.endSerial) continue
+      const facilityId = dataset.rows.facilityIds[i]
+      if (facilitySet && !facilitySet.has(facilityId)) continue
+      const ownerId = dataset.rows.ownerIds[i]
+
+      let deptMap = facilityCounts.get(facilityId)
+      if (!deptMap) { deptMap = new Map(); facilityCounts.set(facilityId, deptMap) }
+      deptMap.set(ownerId, (deptMap.get(ownerId) ?? 0) + 1)
+
+      const deptName = ownerLabels.get(ownerId) ?? 'Unspecified'
+      if (!isPrimaryDept(deptName)) {
+        const setNameId = dataset.rows.setNameIds[i]
+
+        const existing = overallOtherItemMap.get(setNameId) ?? { total: 0, depts: new Map() }
+        existing.total += 1
+        existing.depts.set(ownerId, (existing.depts.get(ownerId) ?? 0) + 1)
+        overallOtherItemMap.set(setNameId, existing)
+
+        let facItemMap = facilityOtherItemMap.get(facilityId)
+        if (!facItemMap) { facItemMap = new Map(); facilityOtherItemMap.set(facilityId, facItemMap) }
+        const facExisting = facItemMap.get(setNameId) ?? { total: 0, depts: new Map() }
+        facExisting.total += 1
+        facExisting.depts.set(ownerId, (facExisting.depts.get(ownerId) ?? 0) + 1)
+        facItemMap.set(setNameId, facExisting)
+      }
+    }
+
+    const buildTopItems = (
+      itemMap: Map<number, { total: number; depts: Map<number, number> }>,
+      limit: number,
+    ) =>
+      Array.from(itemMap.entries())
+        .sort((a, b) => b[1].total - a[1].total)
+        .slice(0, limit)
+        .map(([setNameId, { total, depts }]) => {
+          const topDepts = Array.from(depts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([ownerId, count]) => `${ownerLabels.get(ownerId) ?? 'Unknown'} (${count})`)
+            .join(', ')
+          return { itemName: dataset.setNames[setNameId] ?? 'Unknown Item', total, topDepts }
+        })
+
+    let totalItems = 0
+    let totalOtherItems = 0
+
+    const byFacility = Array.from(facilityCounts.entries())
+      .map(([facilityId, deptMap]) => {
+        const facilityName = dataset.facilities[facilityId] ?? 'Unknown Facility'
+        const totalFacility = Array.from(deptMap.values()).reduce((a, b) => a + b, 0)
+        const topDepts = Array.from(deptMap.entries())
+          .map(([ownerId, count]) => {
+            const deptName = ownerLabels.get(ownerId) ?? 'Unspecified'
+            return { ownerId, deptName, count, isPrimary: isPrimaryDept(deptName) }
+          })
+          .sort((a, b) => b.count - a.count)
+        const primaryCount = topDepts.filter((d) => d.isPrimary).reduce((a, d) => a + d.count, 0)
+        const otherCount = totalFacility - primaryCount
+        totalItems += totalFacility
+        totalOtherItems += otherCount
+        const facItemMap = facilityOtherItemMap.get(facilityId) ?? new Map()
+        return {
+          facilityId,
+          facilityName,
+          totalItems: totalFacility,
+          primaryCount,
+          otherCount,
+          otherRate: toPercent(otherCount, totalFacility),
+          topDepts: topDepts.slice(0, 12),
+          topOtherItems: buildTopItems(facItemMap, 20),
+        }
+      })
+      .sort((a, b) => b.totalItems - a.totalItems)
+
+    const overallTopOtherItems = buildTopItems(overallOtherItemMap, 25)
+
+    return { byFacility, totalItems, totalOtherItems, overallOtherRate: toPercent(totalOtherItems, totalItems), overallTopOtherItems }
+  }, [dataset, dateRangeSerials, selectedFacilities])
 
   const caseRoutingAnalytics = useMemo(() => {
     if (!dataset?.caseRouting || !dateRangeSerials) return null
@@ -892,6 +1023,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       selectedSpecialties.length > 0 ? new Set(selectedSpecialties) : null
     const itemTypeSet = selectedItemTypes.length > 0 ? new Set(selectedItemTypes) : null
     const ownerSet = selectedOwners.length > 0 ? new Set(selectedOwners) : null
+    const facilitySet = selectedFacilities.length > 0 ? new Set(selectedFacilities) : null
 
     const rowIndices: number[] = []
     const specialtyCounts = new Map<string, number>()
@@ -910,6 +1042,9 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
 
       const ownerId = dataset.rows.ownerIds[i]
       if (ownerSet && !ownerSet.has(ownerId)) continue
+
+      const facilityId = dataset.rows.facilityIds[i]
+      if (facilitySet && !facilitySet.has(facilityId)) continue
 
       if (dataset.rows.dayOfWeek[i] !== drilldown.dayKey) continue
 
@@ -943,6 +1078,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
     selectedOwners,
     selectedSpecialties,
     selectedItemTypes,
+    selectedFacilities,
     includeOnsite,
     includeOffsite,
     dateRangeSerials,
@@ -1022,7 +1158,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
         loadId: dataset.loadValues[loadId] ?? 'Unknown Load',
         date: formatDate(dataset.rows.dateSerials[rowIndex]),
         day: DAY_LABEL_BY_KEY.get(dayKey) ?? 'Unknown',
-        location: isOffsite ? 'Off-Site' : 'On-Site',
+        location: isOffsite ? siteLeaveLabel : siteStayLabel,
         facility: dataset.facilities[facilityId] ?? 'Unknown',
         noGo: dataset.rows.noGoFlags[rowIndex] === 1 ? 'Yes' : 'No',
         specialty: specialtyLabelById.get(specialtyId) ?? 'Unspecified',
@@ -1056,7 +1192,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
         LoadID: dataset.loadValues[loadId] ?? 'Unknown Load',
         Date: formatDate(dataset.rows.dateSerials[rowIndex]),
         Day: DAY_LABEL_BY_KEY.get(dayKey) ?? 'Unknown',
-        Location: isOffsite ? 'Off-Site' : 'On-Site',
+        Location: isOffsite ? siteLeaveLabel : siteStayLabel,
         Facility: dataset.facilities[facilityId] ?? 'Unknown',
         NoGo: dataset.rows.noGoFlags[rowIndex] === 1 ? 'Yes' : 'No',
         Specialty: specialtyLabelById.get(specialtyId) ?? 'Unspecified',
@@ -1111,6 +1247,10 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
     XLSX.writeFile(workbook, `case-bucket-${caseDrilldown.chart}-${day}-${segment}-${stamp}.xlsx`)
   }
 
+  const siteLeaveLabel = dataset?.isEndeavorFormat ? 'Cross-Site' : 'Leave (Off-Site)'
+  const siteStayLabel = dataset?.isEndeavorFormat ? 'Same-Site' : 'Stay (On-Site)'
+  const isEndeavor = dataset?.isEndeavorFormat ?? false
+
   return (
     <div className="relative min-h-screen overflow-hidden">
       <div className="pointer-events-none absolute -top-32 left-8 h-64 w-64 rounded-full bg-brand/30 blur-3xl" />
@@ -1159,26 +1299,35 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                 Window: {formatDate(dateRangeSerials?.startSerial ?? null)} to{' '}
                 {formatDate(dateRangeSerials?.endSerial ?? null)}
               </div>
-              <div>
-                Rows parsed: {dataset?.parsedInventoryRows.toLocaleString() ?? 0} inventory /{' '}
-                {dataset?.parsedLoadRows.toLocaleString() ?? 0} loads
-              </div>
-              <div>
-                Rows matched to loads: {dataset?.matchedRows.toLocaleString() ?? 0}
-                {dataset ? ` (${dataset.unmatchedRows.toLocaleString()} unmatched)` : ''}
-              </div>
-              <div>
-                Case rows parsed: {dataset?.caseRouting?.parsedCaseRows.toLocaleString() ?? 0}
-                {dataset?.caseRouting
-                  ? ` (${dataset.caseRouting.matchedCaseRows.toLocaleString()} matched / ${dataset.caseRouting.unmatchedCaseRows.toLocaleString()} unmatched picked)`
-                  : ''}
-              </div>
-              <div>
-                Scan rows parsed: {dataset?.caseRouting?.parsedScanRows.toLocaleString() ?? 0}
-                {dataset?.caseRouting
-                  ? ` (${dataset.caseRouting.scanDestinationMatchRows.toLocaleString()} post-case destination matches)`
-                  : ''}
-              </div>
+              {dataset?.isEndeavorFormat ? (
+                <>
+                  <div>Rows parsed: {dataset.parsedInventoryRows.toLocaleString()} data rows</div>
+                  <div>Processing facilities: {dataset.facilityOptions.length}</div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    Rows parsed: {dataset?.parsedInventoryRows.toLocaleString() ?? 0} inventory /{' '}
+                    {dataset?.parsedLoadRows.toLocaleString() ?? 0} loads
+                  </div>
+                  <div>
+                    Rows matched to loads: {dataset?.matchedRows.toLocaleString() ?? 0}
+                    {dataset ? ` (${dataset.unmatchedRows.toLocaleString()} unmatched)` : ''}
+                  </div>
+                  <div>
+                    Case rows parsed: {dataset?.caseRouting?.parsedCaseRows.toLocaleString() ?? 0}
+                    {dataset?.caseRouting
+                      ? ` (${dataset.caseRouting.matchedCaseRows.toLocaleString()} matched / ${dataset.caseRouting.unmatchedCaseRows.toLocaleString()} unmatched picked)`
+                      : ''}
+                  </div>
+                  <div>
+                    Scan rows parsed: {dataset?.caseRouting?.parsedScanRows.toLocaleString() ?? 0}
+                    {dataset?.caseRouting
+                      ? ` (${dataset.caseRouting.scanDestinationMatchRows.toLocaleString()} post-case destination matches)`
+                      : ''}
+                  </div>
+                </>
+              )}
             </div>
           </div>
           {loading && progress ? (
@@ -1283,12 +1432,31 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
               >
                 Case Routing
               </button>
+              {dataset.isEndeavorFormat ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dept-mix')}
+                  className={`rounded-full border px-4 py-2 text-sm font-medium ${
+                    activeTab === 'dept-mix' ? 'border-ink bg-ink text-white' : 'border-ink/20 bg-white text-ink'
+                  }`}
+                >
+                  Dept. Mix
+                </button>
+              ) : null}
             </section>
 
-            {activeTab !== 'case-routing' ? (
-              <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {activeTab !== 'case-routing' && activeTab !== 'dept-mix' ? (
+              <section className={`grid gap-4 md:grid-cols-2 ${dataset.facilityOptions.length > 0 ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`}>
+                {dataset.facilityOptions.length > 0 ? (
+                  <FilterChecklist
+                    label="Facility Filter"
+                    options={dataset.facilityOptions}
+                    selected={selectedFacilities}
+                    onChange={setSelectedFacilities}
+                  />
+                ) : null}
                 <FilterChecklist
-                  label="Owning Facility Filter"
+                  label={dataset.isEndeavorFormat ? 'Department Filter' : 'Owning Facility Filter'}
                   options={dataset.owners}
                   selected={selectedOwners}
                   onChange={setSelectedOwners}
@@ -1312,9 +1480,9 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                       {includeOnsite && includeOffsite
                         ? 'Both selected'
                         : includeOnsite
-                          ? 'On-site only'
+                          ? `${siteStayLabel} only`
                           : includeOffsite
-                            ? 'Off-site only'
+                            ? `${siteLeaveLabel} only`
                             : 'None selected'}
                     </div>
                   </div>
@@ -1326,7 +1494,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                         onChange={(event) => setIncludeOnsite(event.target.checked)}
                         className="h-4 w-4 rounded border-brand/40 text-brand"
                       />
-                      On-Site
+                      {siteStayLabel}
                     </label>
                     <label className="inline-flex items-center gap-2 rounded-full border border-ink/15 bg-white px-3 py-1 text-sm text-ink">
                       <input
@@ -1335,7 +1503,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                         onChange={(event) => setIncludeOffsite(event.target.checked)}
                         className="h-4 w-4 rounded border-brand/40 text-brand"
                       />
-                      Off-Site
+                      {siteLeaveLabel}
                     </label>
                   </div>
                   <button
@@ -1343,6 +1511,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                     onClick={() => {
                       setIncludeOnsite(true)
                       setIncludeOffsite(true)
+                      setSelectedFacilities([])
                     }}
                     className="mt-3 rounded-full border border-ink/15 bg-white px-3 py-1 text-xs font-medium text-ink"
                   >
@@ -1425,7 +1594,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
               </section>
             ) : null}
 
-            {activeTab !== 'case-routing' && analytics && analytics.totalRows === 0 ? (
+            {analytics && analytics.totalRows === 0 && activeTab !== 'case-routing' && activeTab !== 'dept-mix' ? (
               <section className="rounded-3xl border border-ink/10 bg-white/85 p-8 text-center text-sm text-muted shadow-sm">
                 No rows match the current filter selection in the current date window.
               </section>
@@ -1444,7 +1613,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                   </article>
                   <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
                     <div className="text-xs uppercase tracking-[0.16em] text-muted">
-                      Leave (Off-Site) Rate
+                      {siteLeaveLabel} Rate
                     </div>
                     <div className="mt-2 text-2xl font-semibold text-ink">
                       {formatPercent(toPercent(analytics.totalOffsite, analytics.totalRows))}
@@ -1452,7 +1621,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                   </article>
                   <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
                     <div className="text-xs uppercase tracking-[0.16em] text-muted">
-                      Stay (On-Site) Rate
+                      {siteStayLabel} Rate
                     </div>
                     <div className="mt-2 text-2xl font-semibold text-ink">
                       {formatPercent(toPercent(analytics.totalOnsite, analytics.totalRows))}
@@ -1463,17 +1632,17 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                       Friday vs Other Days
                     </div>
                     <div className="mt-2 text-sm text-ink">
-                      Friday leave rate: <strong>{formatPercent(analytics.fridayOffsiteRate)}</strong>
+                      Friday {siteLeaveLabel.toLowerCase()} rate: <strong>{formatPercent(analytics.fridayOffsiteRate)}</strong>
                     </div>
                     <div className="mt-1 text-sm text-muted">
-                      Other-day leave rate: {formatPercent(analytics.nonFridayOffsiteRate)}
+                      Other-day {siteLeaveLabel.toLowerCase()} rate: {formatPercent(analytics.nonFridayOffsiteRate)}
                     </div>
                   </article>
                 </section>
 
                 <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
                   <div className="text-sm font-semibold text-ink">
-                    Leave vs Stay by Day of Week (Rate)
+                    {siteLeaveLabel} vs {siteStayLabel} by Day of Week (Rate)
                   </div>
                   <p className="mt-1 text-sm text-muted">
                     Aggregated across the selected date range; each day normalized to percentage.
@@ -1495,7 +1664,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                         <Tooltip
                           formatter={(value: number | string | undefined, name: string | undefined) => [
                             formatTooltipPercent(value),
-                            name === 'offsiteRate' ? 'Leave (Off-Site)' : 'Stay (On-Site)',
+                            name === 'offsiteRate' ? siteLeaveLabel : siteStayLabel,
                           ]}
                         />
                         <Legend />
@@ -1503,7 +1672,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           dataKey="offsiteRate"
                           stackId="mix"
                           fill="rgb(var(--accent-rgb))"
-                          name="Leave (Off-Site)"
+                          name={siteLeaveLabel}
                           cursor="pointer"
                           onClick={(_, index) => openDrilldown('mix', 'offsite', index)}
                         />
@@ -1511,7 +1680,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           dataKey="onsiteRate"
                           stackId="mix"
                           fill="rgb(var(--brand-rgb))"
-                          name="Stay (On-Site)"
+                          name={siteStayLabel}
                           cursor="pointer"
                           onClick={(_, index) => openDrilldown('mix', 'onsite', index)}
                         />
@@ -1522,7 +1691,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
 
                 <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
                   <div className="text-sm font-semibold text-ink">
-                    Leave vs Stay by Day of Week (Volume)
+                    {siteLeaveLabel} vs {siteStayLabel} by Day of Week (Volume)
                   </div>
                   <div className="mt-4 h-80">
                     <ResponsiveContainer width="100%" height="100%">
@@ -1535,14 +1704,14 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                         <Bar
                           dataKey="offsiteCount"
                           fill="rgb(var(--accent-rgb))"
-                          name="Leave (Off-Site) Count"
+                          name={`${siteLeaveLabel} Count`}
                           cursor="pointer"
                           onClick={(_, index) => openDrilldown('mix', 'offsite', index)}
                         />
                         <Bar
                           dataKey="onsiteCount"
                           fill="rgb(var(--brand-rgb))"
-                          name="Stay (On-Site) Count"
+                          name={`${siteStayLabel} Count`}
                           cursor="pointer"
                           onClick={(_, index) => openDrilldown('mix', 'onsite', index)}
                         />
@@ -1818,6 +1987,131 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
               </>
             ) : null}
 
+            {activeTab === 'dept-mix' && deptMixAnalytics ? (
+              <>
+                <section className="grid gap-4 md:grid-cols-3">
+                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Total Items (Filtered Facilities)</div>
+                    <div className="mt-2 text-2xl font-semibold text-ink">{deptMixAnalytics.totalItems.toLocaleString()}</div>
+                  </article>
+                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Other Dept Items</div>
+                    <div className="mt-2 text-2xl font-semibold text-ink">{deptMixAnalytics.totalOtherItems.toLocaleString()}</div>
+                    <div className="mt-1 text-sm text-muted">{formatPercent(deptMixAnalytics.overallOtherRate)} of total</div>
+                  </article>
+                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Facilities Shown</div>
+                    <div className="mt-2 text-2xl font-semibold text-ink">{deptMixAnalytics.byFacility.length}</div>
+                  </article>
+                </section>
+
+                {deptMixAnalytics.overallTopOtherItems.length > 0 ? (
+                  <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
+                    <div className="text-sm font-semibold text-ink">Top Items from Other Departments (All Selected Facilities)</div>
+                    <p className="mt-1 text-sm text-muted">
+                      Items most frequently processed for non-primary departments (excludes Main OR, Sterile Processing, Main SPD, DSC).
+                    </p>
+                    <div className="mt-4 overflow-auto">
+                      <table className="min-w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
+                            <th className="px-2 py-2">#</th>
+                            <th className="px-2 py-2">Item Name</th>
+                            <th className="px-2 py-2">Cycles</th>
+                            <th className="px-2 py-2">Top Requesting Depts</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {deptMixAnalytics.overallTopOtherItems.map((row, idx) => (
+                            <tr key={`overall-item-${idx}`} className="border-t border-ink/10">
+                              <td className="px-2 py-2 text-xs text-muted">{idx + 1}</td>
+                              <td className="px-2 py-2 text-ink">{row.itemName}</td>
+                              <td className="px-2 py-2 font-medium text-ink">{row.total.toLocaleString()}</td>
+                              <td className="px-2 py-2 text-xs text-muted">{row.topDepts}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ) : null}
+
+                {deptMixAnalytics.byFacility.map((facilityData) => (
+                  <section key={facilityData.facilityId} className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
+                    <div className="text-sm font-semibold text-ink">{facilityData.facilityName}</div>
+                    <div className="mt-2 grid gap-3 md:grid-cols-3">
+                      <article className="rounded-2xl border border-ink/10 p-3">
+                        <div className="text-xs uppercase tracking-[0.14em] text-muted">Total Items</div>
+                        <div className="mt-1 text-xl font-semibold text-ink">{facilityData.totalItems.toLocaleString()}</div>
+                      </article>
+                      <article className="rounded-2xl border border-ink/10 p-3">
+                        <div className="text-xs uppercase tracking-[0.14em] text-muted">Primary Dept</div>
+                        <div className="mt-1 text-xl font-semibold text-ink">{facilityData.primaryCount.toLocaleString()}</div>
+                        <div className="text-xs text-muted">{formatPercent(toPercent(facilityData.primaryCount, facilityData.totalItems))}</div>
+                      </article>
+                      <article className="rounded-2xl border border-ink/10 p-3">
+                        <div className="text-xs uppercase tracking-[0.14em] text-muted">Other Depts</div>
+                        <div className="mt-1 text-xl font-semibold text-ink">{facilityData.otherCount.toLocaleString()}</div>
+                        <div className="text-xs text-muted">{formatPercent(facilityData.otherRate)}</div>
+                      </article>
+                    </div>
+                    <p className="mt-4 text-xs text-muted">Primary depts (Main OR, Sterile Processing, Main SPD, DSC) shown in blue. Other depts in orange.</p>
+                    <div className="mt-3 h-96">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={facilityData.topDepts} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(100, 116, 139, 0.25)" />
+                          <XAxis type="number" allowDecimals={false} />
+                          <YAxis type="category" dataKey="deptName" width={200} tick={{ fontSize: 11 }} />
+                          <Tooltip formatter={(v: number | string | undefined) => [Number(v).toLocaleString(), 'Items']} />
+                          <Bar dataKey="count" name="Items">
+                            {facilityData.topDepts.map((entry, idx) => (
+                              <Cell
+                                key={`cell-${idx}`}
+                                fill={entry.isPrimary ? 'rgb(var(--brand-rgb))' : 'rgb(var(--accent-rgb))'}
+                              />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    {facilityData.topOtherItems.length > 0 ? (
+                      <div className="mt-6">
+                        <div className="text-sm font-semibold text-ink">Top Items from Other Departments</div>
+                        <div className="mt-3 overflow-auto">
+                          <table className="min-w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
+                                <th className="px-2 py-2">#</th>
+                                <th className="px-2 py-2">Item Name</th>
+                                <th className="px-2 py-2">Cycles</th>
+                                <th className="px-2 py-2">Top Requesting Depts</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {facilityData.topOtherItems.map((row, idx) => (
+                                <tr key={`fac-item-${idx}`} className="border-t border-ink/10">
+                                  <td className="px-2 py-2 text-xs text-muted">{idx + 1}</td>
+                                  <td className="px-2 py-2 text-ink">{row.itemName}</td>
+                                  <td className="px-2 py-2 font-medium text-ink">{row.total.toLocaleString()}</td>
+                                  <td className="px-2 py-2 text-xs text-muted">{row.topDepts}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ) : null}
+                  </section>
+                ))}
+
+                {deptMixAnalytics.byFacility.length === 0 ? (
+                  <section className="rounded-3xl border border-ink/10 bg-white/85 p-8 text-center text-sm text-muted shadow-sm">
+                    No data matches the current facility and date filters.
+                  </section>
+                ) : null}
+              </>
+            ) : null}
+
             {analytics && analytics.totalRows > 0 && activeTab === 'no-go' ? (
               <>
                 <section className="grid gap-4 md:grid-cols-4">
@@ -1834,7 +2128,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                     <div className="mt-2 text-2xl font-semibold text-ink">
                       {formatPercent(analytics.noGoComplianceRate)}
                     </div>
-                    <div className="mt-1 text-sm text-muted">Expected: on-site</div>
+                    <div className="mt-1 text-sm text-muted">Expected: {siteStayLabel.toLowerCase()}</div>
                   </article>
                   <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
                     <div className="text-xs uppercase tracking-[0.16em] text-muted">
@@ -1843,7 +2137,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                     <div className="mt-2 text-2xl font-semibold text-ink">
                       {formatPercent(analytics.goComplianceRate)}
                     </div>
-                    <div className="mt-1 text-sm text-muted">Expected: off-site</div>
+                    <div className="mt-1 text-sm text-muted">Expected: {siteLeaveLabel.toLowerCase()}</div>
                   </article>
                   <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
                     <div className="text-xs uppercase tracking-[0.16em] text-muted">
@@ -1857,7 +2151,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
 
                 <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
                   <div className="text-sm font-semibold text-ink">
-                    No-Go Rows by Day (Expected to Stay On-Site)
+                    No-Go Rows by Day (Expected to Stay {siteStayLabel})
                   </div>
                   <p className="mt-1 text-xs text-muted">
                     Click any bar segment to drill into sets in that bucket.
@@ -1877,8 +2171,8 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           formatter={(value: number | string | undefined, name: string | undefined) => [
                             formatTooltipPercent(value),
                             name === 'expectedOnsiteRate'
-                              ? 'Stayed On-Site (Compliant)'
-                              : 'Left Off-Site (Exception)',
+                              ? `Stayed ${siteStayLabel} (Compliant)`
+                              : `Left ${siteLeaveLabel} (Exception)`,
                           ]}
                         />
                         <Legend />
@@ -1886,7 +2180,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           dataKey="expectedOnsiteRate"
                           stackId="nogo"
                           fill="rgb(var(--brand-rgb))"
-                          name="Stayed On-Site (Compliant)"
+                          name={`Stayed ${siteStayLabel} (Compliant)`}
                           cursor="pointer"
                           onClick={(_, index) => openDrilldown('no-go', 'onsite', index)}
                         />
@@ -1894,7 +2188,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           dataKey="offsiteRate"
                           stackId="nogo"
                           fill="rgb(var(--accent-rgb))"
-                          name="Left Off-Site (Exception)"
+                          name={`Left ${siteLeaveLabel} (Exception)`}
                           cursor="pointer"
                           onClick={(_, index) => openDrilldown('no-go', 'offsite', index)}
                         />
@@ -1944,7 +2238,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
 
                 <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
                   <div className="text-sm font-semibold text-ink">
-                    Go Rows by Day (Expected to Leave Off-Site)
+                    Go Rows by Day (Expected to Leave {siteLeaveLabel})
                   </div>
                   <p className="mt-1 text-xs text-muted">
                     Click any bar segment to drill into sets in that bucket.
@@ -1964,8 +2258,8 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           formatter={(value: number | string | undefined, name: string | undefined) => [
                             formatTooltipPercent(value),
                             name === 'expectedOffsiteRate'
-                              ? 'Left Off-Site (Compliant)'
-                              : 'Stayed On-Site',
+                              ? `Left ${siteLeaveLabel} (Compliant)`
+                              : `Stayed ${siteStayLabel}`,
                           ]}
                         />
                         <Legend />
@@ -1973,7 +2267,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           dataKey="expectedOffsiteRate"
                           stackId="go"
                           fill="rgb(var(--accent-rgb))"
-                          name="Left Off-Site (Compliant)"
+                          name={`Left ${siteLeaveLabel} (Compliant)`}
                           cursor="pointer"
                           onClick={(_, index) => openDrilldown('go', 'offsite', index)}
                         />
@@ -1981,7 +2275,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           dataKey="onsiteRate"
                           stackId="go"
                           fill="rgb(var(--brand-rgb))"
-                          name="Stayed On-Site"
+                          name={`Stayed ${siteStayLabel}`}
                           cursor="pointer"
                           onClick={(_, index) => openDrilldown('go', 'onsite', index)}
                         />
@@ -2012,7 +2306,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
               <div>
                 <div className="text-xs uppercase tracking-[0.16em] text-muted">Bucket Drilldown</div>
                 <h2 className="mt-1 text-lg font-semibold text-ink">
-                  {getDrilldownSegmentLabel(drilldown)} on{' '}
+                  {getDrilldownSegmentLabel(drilldown, isEndeavor)} on{' '}
                   {DAY_LABEL_BY_KEY.get(drilldown.dayKey) ?? 'Unknown'}
                 </h2>
                 <div className="mt-1 text-sm text-muted">
@@ -2059,7 +2353,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                   Day: <span className="font-medium text-ink">{DAY_LABEL_BY_KEY.get(drilldown.dayKey) ?? 'Unknown'}</span>
                 </div>
                 <div className="mt-1">
-                  Segment: <span className="font-medium text-ink">{getDrilldownSegmentLabel(drilldown)}</span>
+                  Segment: <span className="font-medium text-ink">{getDrilldownSegmentLabel(drilldown, isEndeavor)}</span>
                 </div>
                 <div className="mt-1">
                   Current page: <span className="font-medium text-ink">{safeDrilldownPage}</span> of{' '}
@@ -2117,8 +2411,8 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                       <th className="px-2 py-2">Facility</th>
                       <th className="px-2 py-2">No-Go</th>
                       <th className="px-2 py-2">Specialty</th>
-                      <th className="px-2 py-2">Item Type</th>
-                      <th className="px-2 py-2">Owner</th>
+                      <th className="px-2 py-2">{dataset.isEndeavorFormat ? 'Method' : 'Item Type'}</th>
+                      <th className="px-2 py-2">{dataset.isEndeavorFormat ? 'Department' : 'Owner'}</th>
                     </tr>
                   </thead>
                   <tbody>

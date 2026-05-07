@@ -12,17 +12,11 @@ type ParsedCell = {
 
 type ParsedCells = Record<string, ParsedCell>
 
-type SheetRef = {
-  name: string
-  entry: string
-}
-
 const WORKBOOK_ENTRY = 'xl/workbook.xml'
 const WORKBOOK_RELS_ENTRY = 'xl/_rels/workbook.xml.rels'
 const SHARED_STRINGS_ENTRY = 'xl/sharedStrings.xml'
 
-const INVENTORY_TARGET_COLS = new Set(['B', 'F', 'J', 'K', 'L', 'M', 'Z', 'AK', 'AL'])
-const LOADS_TARGET_COLS = new Set(['A', 'E'])
+const ENDEAVOR_TARGET_COLS = new Set(['A', 'B', 'C', 'D', 'E', 'F', 'H', 'J', 'K', 'L'])
 
 const ROW_CLOSE = '</row>'
 const SHARED_STRING_CLOSE = '</si>'
@@ -259,6 +253,36 @@ const runZipPass = async (file: File, handlers: Map<string, EntryHandler>) => {
   })
 }
 
+const createXmlCollector = (onComplete: (xml: string) => void): EntryHandler => {
+  const decoder = new TextDecoder('utf-8')
+  let xml = ''
+
+  return {
+    onChunk: (chunk, final) => {
+      if (chunk.length === 0) {
+        xml += decoder.decode(chunk, { stream: !final })
+      } else {
+        for (let offset = 0; offset < chunk.length; offset += DECODE_SLICE_BYTES) {
+          const end = Math.min(offset + DECODE_SLICE_BYTES, chunk.length)
+          const isLastSlice = final && end === chunk.length
+          xml += decoder.decode(chunk.subarray(offset, end), { stream: !isLastSlice })
+        }
+      }
+      if (final) {
+        onComplete(xml)
+      }
+    },
+  }
+}
+
+const normalizeEntryPath = (target: string) => {
+  const clean = target.trim().replace(/\\/g, '/')
+  if (!clean) return null
+  if (clean.startsWith('/')) return clean.slice(1)
+  if (clean.startsWith('xl/')) return clean
+  return `xl/${clean}`
+}
+
 const tokenFromCell = (cell: ParsedCell | undefined) => {
   if (!cell) return null
   const value = cell.value.trim()
@@ -288,26 +312,6 @@ const parseExcelSerial = (value: string) => {
   return parsed / DAY_MS + 25569
 }
 
-const parseDayOfWeek = (value: string) => {
-  const trimmed = value.trim()
-  if (!trimmed) return null
-
-  const numeric = Number.parseInt(trimmed, 10)
-  if (Number.isFinite(numeric) && numeric >= 1 && numeric <= 7) return numeric
-
-  const normalized = trimmed.slice(0, 3).toLowerCase()
-  const textMap: Record<string, number> = {
-    sun: 1,
-    mon: 2,
-    tue: 3,
-    wed: 4,
-    thu: 5,
-    fri: 6,
-    sat: 7,
-  }
-  return textMap[normalized] ?? null
-}
-
 const excelSerialToDate = (serial: number) => {
   return new Date((serial - 25569) * DAY_MS)
 }
@@ -317,11 +321,6 @@ const deriveDayFromSerial = (serial: number) => {
   if (Number.isNaN(date.getTime())) return null
   const jsDay = date.getDay()
   return jsDay + 1
-}
-
-const parseNoGo = (value: string) => {
-  const normalized = value.trim().toLowerCase()
-  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'y'
 }
 
 const sharedIndexFromToken = (token: string) => {
@@ -380,37 +379,14 @@ const decodeTokenValues = (
   return tokens.map((token) => normalizeLabel(decodeTokenLabel(token, sharedLookup), fallbackLabel))
 }
 
-const createXmlCollector = (onComplete: (xml: string) => void): EntryHandler => {
-  const decoder = new TextDecoder('utf-8')
-  let xml = ''
+const isDataSheetName = (name: string) => name === 'data' || name === 'processing data'
+const isItemsSheetName = (name: string) => name === 'items details' || name === 'items detail'
 
-  return {
-    onChunk: (chunk, final) => {
-      if (chunk.length === 0) {
-        xml += decoder.decode(chunk, { stream: !final })
-      } else {
-        for (let offset = 0; offset < chunk.length; offset += DECODE_SLICE_BYTES) {
-          const end = Math.min(offset + DECODE_SLICE_BYTES, chunk.length)
-          const isLastSlice = final && end === chunk.length
-          xml += decoder.decode(chunk.subarray(offset, end), { stream: !isLastSlice })
-        }
-      }
-      if (final) {
-        onComplete(xml)
-      }
-    },
-  }
-}
+const stripItemSuffix = (name: string) => name.replace(/\s*-\s*\d+\s*$/, '').trim()
 
-const normalizeEntryPath = (target: string) => {
-  const clean = target.trim().replace(/\\/g, '/')
-  if (!clean) return null
-  if (clean.startsWith('/')) return clean.slice(1)
-  if (clean.startsWith('xl/')) return clean
-  return `xl/${clean}`
-}
-
-const resolveSheetEntries = async (file: File) => {
+const resolveEndeavorSheetEntries = async (
+  file: File,
+): Promise<{ dataEntry: string | null; itemsEntry: string | null }> => {
   let workbookXml = ''
   let relsXml = ''
 
@@ -426,225 +402,178 @@ const resolveSheetEntries = async (file: File) => {
   const relPattern = /<Relationship\b[^>]*\bId="([^"]+)"[^>]*\bTarget="([^"]+)"/g
   let relMatch: RegExpExecArray | null = null
   while ((relMatch = relPattern.exec(relsXml)) !== null) {
-    const relId = relMatch[1]
     const entry = normalizeEntryPath(relMatch[2])
-    if (entry) {
-      relIdToEntry.set(relId, entry)
-    }
+    if (entry) relIdToEntry.set(relMatch[1], entry)
   }
 
-  const sheets: SheetRef[] = []
+  let dataEntry: string | null = null
+  let itemsEntry: string | null = null
+
   const sheetPattern = /<sheet\b[^>]*\bname="([^"]+)"[^>]*\br:id="([^"]+)"/g
   let sheetMatch: RegExpExecArray | null = null
   while ((sheetMatch = sheetPattern.exec(workbookXml)) !== null) {
-    const name = sheetMatch[1]
-    const relId = sheetMatch[2]
-    const entry = relIdToEntry.get(relId)
+    const name = sheetMatch[1].toLowerCase()
+    const entry = relIdToEntry.get(sheetMatch[2])
     if (!entry) continue
-    sheets.push({ name, entry })
+    if (isDataSheetName(name)) dataEntry = entry
+    else if (isItemsSheetName(name)) itemsEntry = entry
   }
 
-  const byName = (needle: string) =>
-    sheets.find((sheet) => sheet.name.toLowerCase().includes(needle))?.entry ?? null
-
-  let inventoryEntry = byName('inventory')
-  let loadsEntry = byName('load')
-
-  if (!inventoryEntry && sheets.length >= 2) {
-    inventoryEntry = sheets[0].entry
-  }
-  if (!loadsEntry && sheets.length >= 2) {
-    loadsEntry = sheets[1].entry
-  }
-
-  return { inventoryEntry, loadsEntry }
+  return { dataEntry, itemsEntry }
 }
 
-const isOffsiteFacility = (label: string) => {
-  const normalized = label.trim().toLowerCase()
-  if (!normalized) return false
-  const compressed = normalized.replace(/[^a-z0-9]+/g, '')
-  return compressed.includes('offsite')
-}
-
-export const parseProcessingLocationWorkbook = async (
-  file: File,
-  onProgress?: (progress: ParseProgress) => void,
-): Promise<ProcessingLocationDataset> => {
-  const entries = await resolveSheetEntries(file)
-  if (!entries.inventoryEntry || !entries.loadsEntry) {
-    throw new Error(
-      'Workbook format not recognized. Expected Inventory and Loads worksheets with required columns.',
-    )
-  }
-
-  const loadTokenToId = new Map<string, number>()
-  const loadTokens: string[] = []
-
-  const facilityTokenToId = new Map<string, number>()
-  const facilityTokens: string[] = []
-
-  const specialtyTokenToId = new Map<string, number>()
-  const specialtyTokens: string[] = []
-
-  const itemTypeTokenToId = new Map<string, number>()
-  const itemTypeTokens: string[] = []
-
-  const ownerTokenToId = new Map<string, number>()
-  const ownerTokens: string[] = []
-
-  const setNameTokenToId = new Map<string, number>()
-  const setNameTokens: string[] = []
-
-  const loadToFacilityId = new Map<number, number>()
-
-  const inventoryLoadIds: number[] = []
-  const inventoryDateSerials: number[] = []
-  const inventoryDayOfWeek: number[] = []
-  const inventoryOwnerIds: number[] = []
-  const inventorySpecialtyIds: number[] = []
-  const inventoryItemTypeIds: number[] = []
-  const inventoryNoGoFlags: number[] = []
-  const inventorySetNameIds: number[] = []
-
-  let parsedInventoryRows = 0
-  let parsedLoadRows = 0
-
-  const inventoryParser = createWorksheetRowParser(INVENTORY_TARGET_COLS, (rowNumber, cells) => {
-    if (rowNumber === 1) return
-    parsedInventoryRows += 1
-
-    if (parsedInventoryRows % 25_000 === 0) {
-      onProgress?.({
-        phase: 'sheets',
-        message: `Reading Inventory rows (${parsedInventoryRows.toLocaleString()})`,
-        inventoryRowsParsed: parsedInventoryRows,
-        loadRowsParsed: parsedLoadRows,
-      })
-    }
-
-    const loadToken = tokenFromCell(cells.B)
-    if (!loadToken) return
-
-    const dateSerial = parseExcelSerial(cells.AK?.value ?? '')
-    if (dateSerial === null) return
-
-    let dayOfWeek = parseDayOfWeek(cells.AL?.value ?? '')
-    if (dayOfWeek === null) {
-      dayOfWeek = deriveDayFromSerial(dateSerial)
-    }
-    if (dayOfWeek === null) return
-
-    const specialtyToken = tokenFromCell(cells.J) ?? 'v:Unspecified'
-    const itemTypeToken = tokenFromCell(cells.K) ?? 'v:Unspecified'
-    const ownerToken = tokenFromCell(cells.F) ?? 'v:Unknown Owner'
-    const setNameToken = tokenFromCell(cells.M) ?? tokenFromCell(cells.L) ?? 'v:Unnamed Set'
-    const noGoFlag = parseNoGo(cells.Z?.value ?? '') ? 1 : 0
-
-    const loadId = internToken(loadToken, loadTokenToId, loadTokens)
-    const ownerId = internToken(ownerToken, ownerTokenToId, ownerTokens)
-    const specialtyId = internToken(specialtyToken, specialtyTokenToId, specialtyTokens)
-    const itemTypeId = internToken(itemTypeToken, itemTypeTokenToId, itemTypeTokens)
-    const setNameId = internToken(setNameToken, setNameTokenToId, setNameTokens)
-
-    inventoryLoadIds.push(loadId)
-    inventoryDateSerials.push(dateSerial)
-    inventoryDayOfWeek.push(dayOfWeek)
-    inventoryOwnerIds.push(ownerId)
-    inventorySpecialtyIds.push(specialtyId)
-    inventoryItemTypeIds.push(itemTypeId)
-    inventoryNoGoFlags.push(noGoFlag)
-    inventorySetNameIds.push(setNameId)
-  })
-
-  const loadsParser = createWorksheetRowParser(LOADS_TARGET_COLS, (rowNumber, cells) => {
-    if (rowNumber === 1) return
-    parsedLoadRows += 1
-
-    if (parsedLoadRows % 10_000 === 0) {
-      onProgress?.({
-        phase: 'sheets',
-        message: `Reading Loads rows (${parsedLoadRows.toLocaleString()})`,
-        inventoryRowsParsed: parsedInventoryRows,
-        loadRowsParsed: parsedLoadRows,
-      })
-    }
-
-    const loadToken = tokenFromCell(cells.A)
-    const facilityToken = tokenFromCell(cells.E)
-    if (!loadToken || !facilityToken) return
-
-    const loadId = internToken(loadToken, loadTokenToId, loadTokens)
-    const facilityId = internToken(facilityToken, facilityTokenToId, facilityTokens)
-    loadToFacilityId.set(loadId, facilityId)
-  })
-
-  onProgress?.({
-    phase: 'sheets',
-    message: 'Reading Inventory and Loads sheets...',
-    inventoryRowsParsed: 0,
-    loadRowsParsed: 0,
-  })
+export const isEndeavorWorkbook = async (file: File): Promise<boolean> => {
+  let workbookXml = ''
 
   await runZipPass(
     file,
     new Map<string, EntryHandler>([
-      [entries.inventoryEntry, inventoryParser],
-      [entries.loadsEntry, loadsParser],
+      [WORKBOOK_ENTRY, createXmlCollector((xml) => (workbookXml = xml))],
     ]),
   )
 
-  if (parsedInventoryRows === 0 || parsedLoadRows === 0) {
+  const sheetPattern = /<sheet\b[^>]*\bname="([^"]+)"/g
+  let sheetMatch: RegExpExecArray | null = null
+  while ((sheetMatch = sheetPattern.exec(workbookXml)) !== null) {
+    if (isDataSheetName(sheetMatch[1].toLowerCase())) return true
+  }
+
+  return false
+}
+
+const ITEMS_DETAILS_TARGET_COLS = new Set(['B', 'I'])
+
+export const parseEndeavorWorkbook = async (
+  file: File,
+  onProgress?: (progress: ParseProgress) => void,
+): Promise<ProcessingLocationDataset> => {
+  const { dataEntry, itemsEntry } = await resolveEndeavorSheetEntries(file)
+  if (!dataEntry) {
     throw new Error(
-      'Workbook format not recognized. Expected Inventory and Loads worksheets with required columns.',
+      'Endeavor workbook format not recognized. Expected a "Processing Data" or "data" sheet.',
     )
   }
 
-  onProgress?.({
-    phase: 'joining',
-    message: 'Joining Inventory rows to Loads by Sterilizer Load ID...',
-    inventoryRowsParsed: parsedInventoryRows,
-    loadRowsParsed: parsedLoadRows,
+  const facilityTokenToId = new Map<string, number>()
+  const facilityTokens: string[] = []
+
+  const loadTokenToId = new Map<string, number>()
+  const loadTokens: string[] = []
+
+  const methodTokenToId = new Map<string, number>()
+  const methodTokens: string[] = []
+
+  const deptTokenToId = new Map<string, number>()
+  const deptTokens: string[] = []
+
+  const invNameTokenToId = new Map<string, number>()
+  const invNameTokens: string[] = []
+
+  const specialtyTokenToId = new Map<string, number>()
+  const specialtyTokens: string[] = []
+
+  const rowFacilityIds: number[] = []
+  const rowDateSerials: number[] = []
+  const rowDayOfWeek: number[] = []
+  const rowLoadIds: number[] = []
+  const rowMethodIds: number[] = []
+  const rowDeptIds: number[] = []
+  const rowInvNameIds: number[] = []
+  const rowSpecialtyIds: number[] = []
+  const iussTokenArr: string[] = []
+
+  const itemDetailNameTokens: string[] = []
+  const itemDetailFacilityTokens: string[] = []
+
+  let parsedRows = 0
+  let skippedRows = 0
+
+  const itemsParser = createWorksheetRowParser(ITEMS_DETAILS_TARGET_COLS, (rowNumber, cells) => {
+    if (rowNumber === 1) return
+    const nameToken = tokenFromCell(cells.I)
+    const facilityToken = tokenFromCell(cells.B)
+    if (!nameToken || !facilityToken) return
+    itemDetailNameTokens.push(nameToken)
+    itemDetailFacilityTokens.push(facilityToken)
   })
 
-  const matchedDateSerials: number[] = []
-  const matchedDayOfWeek: number[] = []
-  const matchedOwnerIds: number[] = []
-  const matchedSpecialtyIds: number[] = []
-  const matchedItemTypeIds: number[] = []
-  const matchedNoGoFlags: number[] = []
-  const matchedFacilityIds: number[] = []
-  const matchedLoadIds: number[] = []
-  const matchedSetNameIds: number[] = []
-  let unmatchedRows = 0
+  const dataParser = createWorksheetRowParser(ENDEAVOR_TARGET_COLS, (rowNumber, cells) => {
+    if (rowNumber <= 2) return
 
-  for (let i = 0; i < inventoryLoadIds.length; i += 1) {
-    const loadId = inventoryLoadIds[i]
-    const facilityId = loadToFacilityId.get(loadId)
-    if (facilityId === undefined) {
-      unmatchedRows += 1
-      continue
+    parsedRows += 1
+    if (parsedRows % 25_000 === 0) {
+      onProgress?.({
+        phase: 'sheets',
+        message: `Reading data rows (${parsedRows.toLocaleString()})`,
+        inventoryRowsParsed: parsedRows,
+        loadRowsParsed: 0,
+      })
     }
 
-    matchedDateSerials.push(inventoryDateSerials[i])
-    matchedDayOfWeek.push(inventoryDayOfWeek[i])
-    matchedOwnerIds.push(inventoryOwnerIds[i])
-    matchedSpecialtyIds.push(inventorySpecialtyIds[i])
-    matchedItemTypeIds.push(inventoryItemTypeIds[i])
-    matchedNoGoFlags.push(inventoryNoGoFlags[i])
-    matchedFacilityIds.push(facilityId)
-    matchedLoadIds.push(loadId)
-    matchedSetNameIds.push(inventorySetNameIds[i])
-  }
+    const dateSerial = parseExcelSerial(cells.B?.value ?? '')
+    if (dateSerial === null) {
+      skippedRows += 1
+      return
+    }
+
+    const dayOfWeek = deriveDayFromSerial(dateSerial)
+    if (dayOfWeek === null) {
+      skippedRows += 1
+      return
+    }
+
+    const facilityToken = tokenFromCell(cells.C) ?? 'v:Unknown Facility'
+    const sterilizerToken = tokenFromCell(cells.D) ?? 'v:Unknown'
+    const loadNo = cells.E?.value?.trim() ?? 'Unknown'
+    const methodToken = tokenFromCell(cells.F) ?? 'v:Unknown'
+    const iussToken = tokenFromCell(cells.H) ?? 'v:false'
+    const deptToken = tokenFromCell(cells.J) ?? 'v:Unspecified'
+    const invNameToken = tokenFromCell(cells.K) ?? 'v:Unknown Item'
+    const specialtyToken = tokenFromCell(cells.L) ?? 'v:Unspecified'
+
+    const compoundLoadToken = sterilizerToken + '|' + loadNo
+
+    const facilityId = internToken(facilityToken, facilityTokenToId, facilityTokens)
+    const loadId = internToken(compoundLoadToken, loadTokenToId, loadTokens)
+    const methodId = internToken(methodToken, methodTokenToId, methodTokens)
+    const deptId = internToken(deptToken, deptTokenToId, deptTokens)
+    const invNameId = internToken(invNameToken, invNameTokenToId, invNameTokens)
+    const specialtyId = internToken(specialtyToken, specialtyTokenToId, specialtyTokens)
+
+    rowFacilityIds.push(facilityId)
+    rowDateSerials.push(dateSerial)
+    rowDayOfWeek.push(dayOfWeek)
+    rowLoadIds.push(loadId)
+    rowMethodIds.push(methodId)
+    rowDeptIds.push(deptId)
+    rowInvNameIds.push(invNameId)
+    rowSpecialtyIds.push(specialtyId)
+    iussTokenArr.push(iussToken)
+  })
+
+  onProgress?.({
+    phase: 'sheets',
+    message: 'Reading Endeavor data sheet...',
+    inventoryRowsParsed: 0,
+    loadRowsParsed: 0,
+  })
+
+  const sheetHandlers = new Map<string, EntryHandler>([[dataEntry, dataParser]])
+  if (itemsEntry) sheetHandlers.set(itemsEntry, itemsParser)
+
+  await runZipPass(file, sheetHandlers)
 
   const neededSharedIndices = new Set<number>()
   ;[
-    ownerTokens,
+    deptTokens,
     specialtyTokens,
-    itemTypeTokens,
+    methodTokens,
     facilityTokens,
-    setNameTokens,
+    invNameTokens,
     loadTokens,
+    iussTokenArr,
+    itemDetailNameTokens,
+    itemDetailFacilityTokens,
   ].forEach((tokens) => {
     tokens.forEach((token) => {
       const index = sharedIndexFromToken(token)
@@ -659,8 +588,8 @@ export const parseProcessingLocationWorkbook = async (
     onProgress?.({
       phase: 'shared-strings',
       message: 'Decoding text labels...',
-      inventoryRowsParsed: parsedInventoryRows,
-      loadRowsParsed: parsedLoadRows,
+      inventoryRowsParsed: parsedRows,
+      loadRowsParsed: 0,
     })
 
     await runZipPass(
@@ -672,77 +601,127 @@ export const parseProcessingLocationWorkbook = async (
   }
 
   const { options: ownerOptions, remap: ownerRemap } = buildCanonicalOptions(
-    ownerTokens,
+    deptTokens,
     sharedLookup,
-    'Unknown Owner',
+    'Unspecified',
   )
   const { options: specialtyOptions, remap: specialtyRemap } = buildCanonicalOptions(
     specialtyTokens,
     sharedLookup,
     'Unspecified',
   )
-  const { options: itemTypeOptions, remap: itemTypeRemap } = buildCanonicalOptions(
-    itemTypeTokens,
+  const { options: methodOptions, remap: methodRemap } = buildCanonicalOptions(
+    methodTokens,
     sharedLookup,
     'Unspecified',
   )
 
-  const facilityLabels = decodeTokenValues(facilityTokens, sharedLookup, 'Unknown')
-  const loadValues = decodeTokenValues(loadTokens, sharedLookup, 'Unknown Load')
-  const setNames = decodeTokenValues(setNameTokens, sharedLookup, 'Unnamed Set')
-  const facilityOffsiteFlags = facilityLabels.map((label) => (isOffsiteFacility(label) ? 1 : 0))
+  const facilityLabels = decodeTokenValues(facilityTokens, sharedLookup, 'Unknown Facility')
+  const decodedInvNames = decodeTokenValues(invNameTokens, sharedLookup, 'Unknown Item')
+
+  const facilityOptions: FilterOption[] = facilityLabels
+    .map((label, id) => ({ id, label }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+
+  const loadValues = loadTokens.map((compoundToken) => {
+    const pipeIndex = compoundToken.lastIndexOf('|')
+    if (pipeIndex === -1) return normalizeLabel(decodeTokenLabel(compoundToken, sharedLookup), 'Unknown')
+    const sterilizerToken = compoundToken.slice(0, pipeIndex)
+    const loadNo = compoundToken.slice(pipeIndex + 1)
+    const sterilizerName = normalizeLabel(decodeTokenLabel(sterilizerToken, sharedLookup), 'Unknown')
+    return `${sterilizerName} / Load ${loadNo}`
+  })
+
+  const n = rowFacilityIds.length
+  const noGoFlags = new Uint8Array(n)
+  for (let i = 0; i < n; i += 1) {
+    const iussToken = iussTokenArr[i]
+    if (!iussToken) continue
+    const decoded = iussToken.startsWith('s:')
+      ? (sharedLookup.get(sharedIndexFromToken(iussToken) ?? -1) ?? '')
+      : iussToken.slice(2)
+    if (decoded.trim().toLowerCase() === 'true') {
+      noGoFlags[i] = 1
+    }
+  }
+
+  // Build cross-site lookup from Items Details
+  const itemHomeMap = new Map<string, Set<string>>()
+  for (let i = 0; i < itemDetailNameTokens.length; i += 1) {
+    const rawName = normalizeLabel(decodeTokenLabel(itemDetailNameTokens[i], sharedLookup), '')
+    const baseName = stripItemSuffix(rawName).toLowerCase()
+    const facility = normalizeLabel(decodeTokenLabel(itemDetailFacilityTokens[i], sharedLookup), '')
+    if (!baseName || !facility) continue
+    const existing = itemHomeMap.get(baseName) ?? new Set<string>()
+    existing.add(facility)
+    itemHomeMap.set(baseName, existing)
+  }
+
+  // Map invName token ID → home facilities
+  const setNameToHomes = new Map<number, Set<string>>()
+  for (let tokenId = 0; tokenId < invNameTokens.length; tokenId += 1) {
+    const fullName = normalizeLabel(decodeTokenLabel(invNameTokens[tokenId], sharedLookup), '')
+    const baseName = stripItemSuffix(fullName).toLowerCase()
+    const homes = itemHomeMap.get(baseName)
+    if (homes) setNameToHomes.set(tokenId, homes)
+  }
+
+  const finalOwnerIds = new Uint32Array(n)
+  const finalSpecialtyIds = new Uint32Array(n)
+  const finalMethodIds = new Uint32Array(n)
+  const offsiteFlags = new Uint8Array(n)
 
   let minDateSerial = Number.POSITIVE_INFINITY
   let maxDateSerial = Number.NEGATIVE_INFINITY
 
-  const offsiteFlags: number[] = new Array(matchedFacilityIds.length)
-  for (let i = 0; i < matchedFacilityIds.length; i += 1) {
-    const facilityId = matchedFacilityIds[i]
-    offsiteFlags[i] = facilityOffsiteFlags[facilityId] ?? 0
+  for (let i = 0; i < n; i += 1) {
+    finalOwnerIds[i] = ownerRemap[rowDeptIds[i]]
+    finalSpecialtyIds[i] = specialtyRemap[rowSpecialtyIds[i]]
+    finalMethodIds[i] = methodRemap[rowMethodIds[i]]
 
-    matchedOwnerIds[i] = ownerRemap[matchedOwnerIds[i]]
-    matchedSpecialtyIds[i] = specialtyRemap[matchedSpecialtyIds[i]]
-    matchedItemTypeIds[i] = itemTypeRemap[matchedItemTypeIds[i]]
+    const procFacility = facilityLabels[rowFacilityIds[i]] ?? ''
+    const homes = setNameToHomes.get(rowInvNameIds[i])
+    if (homes && !homes.has(procFacility)) offsiteFlags[i] = 1
 
-    const dateSerial = matchedDateSerials[i]
+    const dateSerial = rowDateSerials[i]
     if (dateSerial < minDateSerial) minDateSerial = dateSerial
     if (dateSerial > maxDateSerial) maxDateSerial = dateSerial
   }
 
   onProgress?.({
     phase: 'complete',
-    message: 'Workbook parsing complete.',
-    inventoryRowsParsed: parsedInventoryRows,
-    loadRowsParsed: parsedLoadRows,
+    message: 'Endeavor workbook parsing complete.',
+    inventoryRowsParsed: parsedRows,
+    loadRowsParsed: 0,
   })
 
   return {
     rows: {
-      dateSerials: Float64Array.from(matchedDateSerials),
-      dayOfWeek: Uint8Array.from(matchedDayOfWeek),
-      ownerIds: Uint32Array.from(matchedOwnerIds),
-      specialtyIds: Uint32Array.from(matchedSpecialtyIds),
-      itemTypeIds: Uint32Array.from(matchedItemTypeIds),
-      facilityIds: Uint32Array.from(matchedFacilityIds),
-      loadIds: Uint32Array.from(matchedLoadIds),
-      setNameIds: Uint32Array.from(matchedSetNameIds),
-      noGoFlags: Uint8Array.from(matchedNoGoFlags),
-      offsiteFlags: Uint8Array.from(offsiteFlags),
+      dateSerials: Float64Array.from(rowDateSerials),
+      dayOfWeek: Uint8Array.from(rowDayOfWeek),
+      ownerIds: finalOwnerIds,
+      specialtyIds: finalSpecialtyIds,
+      itemTypeIds: finalMethodIds,
+      facilityIds: Uint32Array.from(rowFacilityIds),
+      loadIds: Uint32Array.from(rowLoadIds),
+      setNameIds: Uint32Array.from(rowInvNameIds),
+      noGoFlags,
+      offsiteFlags,
     },
     owners: ownerOptions,
     specialties: specialtyOptions,
-    itemTypes: itemTypeOptions,
+    itemTypes: methodOptions,
     facilities: facilityLabels,
     loadValues,
-    setNames,
+    setNames: decodedInvNames,
     minDateSerial: Number.isFinite(minDateSerial) ? minDateSerial : null,
     maxDateSerial: Number.isFinite(maxDateSerial) ? maxDateSerial : null,
-    parsedInventoryRows,
-    parsedLoadRows,
-    matchedRows: matchedDateSerials.length,
-    unmatchedRows,
+    parsedInventoryRows: parsedRows,
+    parsedLoadRows: 0,
+    matchedRows: n,
+    unmatchedRows: skippedRows,
     caseRouting: null,
-    facilityOptions: [],
-    isEndeavorFormat: false,
+    facilityOptions,
+    isEndeavorFormat: true,
   }
 }

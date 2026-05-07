@@ -9,6 +9,7 @@ export type MetricKey =
   | 'assemblyMissingInst'
   | 'sterilizerLoads'
   | 'itemsSterilized'
+  | 'itemsPerLoad'
   | 'deliverScans'
   | 'defectRate'
 
@@ -99,6 +100,14 @@ export const DEFAULT_METRICS: MetricDefinition[] = [
     decimals: 0,
   },
   {
+    key: 'itemsPerLoad',
+    label: 'Items per Load',
+    higherBetter: true,
+    format: 'number',
+    decimals: 1,
+    helper: 'items sterilized / load',
+  },
+  {
     key: 'deliverScans',
     label: 'Deliver Scans',
     higherBetter: true,
@@ -111,7 +120,7 @@ export const DEFAULT_METRICS: MetricDefinition[] = [
     higherBetter: false,
     format: 'rate',
     decimals: 1,
-    helper: 'lower is better',
+    helper: 'event-based',
   },
 ]
 
@@ -142,6 +151,14 @@ export type RawRow = {
   'Deliver Scans': number
   'Activity Count': number
   'Activity Time (Mins)': number
+  Role?: string
+  'Audit Check Count'?: number
+  'Audit Fail Count'?: number
+  'Coaching Count'?: number
+  'PTO Hours'?: number
+  'Unpaid Hours'?: number
+  'On-Call Hours'?: number
+  'Overtime Hours'?: number
 }
 
 export type PillarKey = 'decon' | 'assembly' | 'sterilize'
@@ -166,12 +183,33 @@ export type UserScores = {
   versatilityPercentile: number
 }
 
+export type BadgeTier = 'bronze' | 'silver' | 'gold'
+
+export type Badge = {
+  label: string
+  tier: BadgeTier
+  category: string
+}
+
 export type UserRecord = {
   id: string
   name: string
   techLabel: string
+  role: string
   hoursWorked: number
   productivityRanked: boolean
+  qualityContext: {
+    eventCount: number
+    auditChecks: number
+    auditFails: number
+    coachingCount: number
+  }
+  timekeepingContext: {
+    ptoHours: number
+    unpaidHours: number
+    onCallHours: number
+    overtimeHours: number
+  }
   productivityDrivers: {
     decon: number
     assembly: number
@@ -189,7 +227,7 @@ export type UserRecord = {
     icon: string
     description: string
   }
-  badges: string[]
+  badges: Badge[]
   coachingSummary: string
   strengths: string[]
   opportunity: string
@@ -262,6 +300,20 @@ const percentileFromSorted = (value: number, sortedValues: number[], higherBette
   const p = ((midpointRank - 0.5) / (sortedValues.length - 1)) * 100
   const oriented = higherBetter ? p : 100 - p
   return Math.max(0, Math.min(100, oriented))
+}
+
+const topAnchoredPercentileFromSorted = (
+  value: number,
+  sortedValues: number[],
+  higherBetter: boolean,
+) => {
+  if (!sortedValues.length) return 0
+  if (sortedValues.length === 1) return 100
+  const lower = lowerBound(sortedValues, value)
+  const upper = upperBound(sortedValues, value)
+  const rank = higherBetter ? upper - 1 : sortedValues.length - lower - 1
+  const p = (rank / (sortedValues.length - 1)) * 100
+  return Math.max(0, Math.min(100, p))
 }
 
 type SortedMap<T extends string> = Record<T, number[]>
@@ -412,17 +464,29 @@ const STRENGTH_TITLES: Record<StrengthCategory, string[]> = {
 const strengthTemplates = [
   "When it comes to {{pillar}}, you're operating at a level most peers don't reach.",
   'Your {{metric}} puts you in elite territory — keep doing exactly what you are doing.',
+  "{{pillar}} is your superpower — the numbers don't lie.",
+  'Top-tier {{metric}} is rare. You make it look routine.',
+  "You lead the department in {{metric}} — that kind of consistency sets the standard.",
+  "{{pillar}} performance like yours doesn't happen by accident. It's discipline.",
+  "The data on {{metric}} is clear: you're one of the best in this cohort.",
+  "Peers measure themselves against your {{metric}}. Keep the bar high.",
 ]
 
 const growthTemplates = [
   'The data suggests {{metric}} is your biggest opportunity — tightening this up would level you up fast.',
   'One small improvement in {{metric}} could unlock your next archetype.',
+  'Your {{metric}} is the one lever that would move your overall score the most right now.',
+  'Focus on {{metric}} this period — small gains there have outsized impact on your ranking.',
+  'Everyone has a ceiling to break. For you, that ceiling is {{metric}}.',
+  'You have the foundation — sharpening {{metric}} is what separates good from great.',
+  "{{metric}} is the gap between where you are and where you could be. It's closer than you think.",
+  'Your peers who rank above you are mostly outperforming you on {{metric}}. That gap is closeable.',
 ]
 
 const metricToPillar = (key: MetricKey) => {
   if (['deconScans', 'sinkInst', 'sinkTrays'].includes(key)) return 'Decontamination'
   if (['assembledTrays', 'assembledPacks', 'assembledInst'].includes(key)) return 'Assembly'
-  if (['sterilizerLoads', 'itemsSterilized', 'deliverScans'].includes(key)) return 'Sterilization'
+  if (['sterilizerLoads', 'itemsSterilized', 'itemsPerLoad', 'deliverScans'].includes(key)) return 'Sterilization'
   if (['defectRate', 'assemblyMissingInst'].includes(key)) return 'Quality'
   if (key === 'workedHoursPerUnit') return 'Efficiency'
   return 'Performance'
@@ -449,8 +513,8 @@ export const REQUIRED_COLUMNS: Array<keyof RawRow> = [
 
 export const coerceRow = (row: Record<string, unknown>): RawRow => {
   return {
-    'User ID': String(row['User ID'] ?? ''),
-    'User Name': String(row['User Name'] ?? ''),
+    'User ID': String(row['User ID'] ?? '').trim(),
+    'User Name': String(row['User Name'] ?? '').trim(),
     'Hours Worked': toNumber(row['Hours Worked']),
     NumofEvents: toNumber(row['NumofEvents']),
     'Defect Rate': toNumber(row['Defect Rate']),
@@ -466,6 +530,14 @@ export const coerceRow = (row: Record<string, unknown>): RawRow => {
     'Deliver Scans': toNumber(row['Deliver Scans']),
     'Activity Count': toNumber(row['Activity Count']),
     'Activity Time (Mins)': toNumber(row['Activity Time (Mins)']),
+    Role: String(row.Role ?? '').trim(),
+    'Audit Check Count': toNumber(row['Audit Check Count']),
+    'Audit Fail Count': toNumber(row['Audit Fail Count']),
+    'Coaching Count': toNumber(row['Coaching Count']),
+    'PTO Hours': toNumber(row['PTO Hours']),
+    'Unpaid Hours': toNumber(row['Unpaid Hours']),
+    'On-Call Hours': toNumber(row['On-Call Hours']),
+    'Overtime Hours': toNumber(row['Overtime Hours']),
   }
 }
 
@@ -478,6 +550,29 @@ export const buildReport = (
   options: BuildReportOptions = {},
 ): ProcessedReport => {
   const hoursWorkedAvailable = options.hoursWorkedAvailable ?? true
+
+  // Build stable tech labels sorted by user ID so the same person always gets the same Tech # label
+  // regardless of their position in the spreadsheet.
+  const stableSorted = [...rows].sort((a, b) => {
+    const idA = String(a['User ID'] ?? '').trim()
+    const idB = String(b['User ID'] ?? '').trim()
+    if (idA && idB) return idA.localeCompare(idB)
+    const nameA = String(a['User Name'] ?? '').trim().toLowerCase()
+    const nameB = String(b['User Name'] ?? '').trim().toLowerCase()
+    return nameA.localeCompare(nameB)
+  })
+  const stableLabelMap = new Map(
+    stableSorted.map((row, i) => {
+      const key = String(row['User ID'] ?? '').trim() || String(row['User Name'] ?? '').trim().toLowerCase()
+      return [key, `Tech #${i + 1}`]
+    }),
+  )
+  const getTechLabel = (row: RawRow) => {
+    const idKey = String(row['User ID'] ?? '').trim()
+    const nameKey = String(row['User Name'] ?? '').trim().toLowerCase()
+    return stableLabelMap.get(idKey) ?? stableLabelMap.get(nameKey) ?? `Tech #?`
+  }
+
   const baseUsers = rows.map((row, index) => {
     // Normalizing productivity has trade-offs; when available, we use timekeeping
     // Hours Worked. If hours are missing, productivity falls back to total-volume
@@ -504,6 +599,8 @@ export const buildReport = (
 
     const id = String(row['User ID'] ?? '')
     const name = String(row['User Name'] ?? '').trim() || `Tech ${index + 1}`
+    const role = String(row.Role ?? '').trim()
+    const itemsPerLoad = sterilizerLoads > 0 ? itemsSterilized / sterilizerLoads : 0
 
     const pillarTotals = buildPillarTotals({
       deconScans,
@@ -520,8 +617,21 @@ export const buildReport = (
     return {
       id,
       name,
-      techLabel: `Tech #${index + 1}`,
+      techLabel: getTechLabel(row),
+      role,
       hoursWorked,
+      qualityContext: {
+        eventCount: toNumber(row['NumofEvents']),
+        auditChecks: toNumber(row['Audit Check Count']),
+        auditFails: toNumber(row['Audit Fail Count']),
+        coachingCount: toNumber(row['Coaching Count']),
+      },
+      timekeepingContext: {
+        ptoHours: toNumber(row['PTO Hours']),
+        unpaidHours: toNumber(row['Unpaid Hours']),
+        onCallHours: toNumber(row['On-Call Hours']),
+        overtimeHours: toNumber(row['Overtime Hours']),
+      },
       metrics: {
         deconScans,
         sinkInst,
@@ -533,6 +643,7 @@ export const buildReport = (
         assemblyMissingInst: missingInstRate,
         sterilizerLoads,
         itemsSterilized,
+        itemsPerLoad,
         deliverScans,
         defectRate: toNumber(row['Defect Rate']),
       },
@@ -609,11 +720,6 @@ export const buildReport = (
       sterilize: user.pillarTotals.sterilize >= pillarMedians.sterilize,
     }
 
-    const pillarCount =
-      (pillarsAboveMedian.decon ? 1 : 0) +
-      (pillarsAboveMedian.assembly ? 1 : 0) +
-      (pillarsAboveMedian.sterilize ? 1 : 0)
-
     const productivity =
       driverBasis === 'rates'
         ? (pillarRatePercentiles.decon +
@@ -625,9 +731,12 @@ export const buildReport = (
             3
           : 0
 
-    const quality = percentiles.defectRate * 0.7 + percentiles.assemblyMissingInst * 0.3
+    const quality = percentiles.defectRate
 
-    const versatility = (pillarCount / 3) * 100
+    // Average of all three pillar percentiles so users who dominate multiple pillars
+    // score higher than those who merely squeak above median.
+    const versatility =
+      (pillarPercentiles.decon + pillarPercentiles.assembly + pillarPercentiles.sterilize) / 3
 
     return {
       ...user,
@@ -685,7 +794,11 @@ export const buildReport = (
 
   const usersWithScores = usersWithPercentiles.map((user, index) => {
     const scorePercentiles = scorePercentilesByUser[index]
-    const overallPercentile = percentileFromSorted(scorePercentiles.overall, sortedOverallScores, true)
+    const overallPercentile = topAnchoredPercentileFromSorted(
+      scorePercentiles.overall,
+      sortedOverallScores,
+      true,
+    )
 
     const contributionsTotal =
       user.pillarTotals.decon + user.pillarTotals.assembly + user.pillarTotals.sterilize
@@ -734,16 +847,42 @@ export const buildReport = (
       icon: archetypeIconMap[archetypeKey],
     }
 
-    const eligibleStrengths: StrengthCategory[] = []
-    if (user.percentiles.defectRate >= 90) eligibleStrengths.push('quality')
-    if (user.percentiles.assembledInst >= 90) eligibleStrengths.push('speed')
-    if (user.pillarPercentiles.decon >= 90) eligibleStrengths.push('decon')
-    if (user.pillarPercentiles.sterilize >= 90) eligibleStrengths.push('sterilize')
-    if (pillarCount >= 2) eligibleStrengths.push('multi')
+    type BadgeCandidate = { category: StrengthCategory; tier: BadgeTier }
+    const badgeCandidates: BadgeCandidate[] = []
 
-    const badges = eligibleStrengths.map((category) =>
-      pickBySeed(STRENGTH_TITLES[category], `${userSeed}-${category}-strength`),
-    )
+    const addBadge = (condition: boolean, tier: BadgeTier, category: StrengthCategory) => {
+      if (condition) badgeCandidates.push({ category, tier })
+    }
+
+    // Quality badges
+    addBadge(user.percentiles.defectRate >= 95, 'gold', 'quality')
+    addBadge(user.percentiles.defectRate >= 90 && user.percentiles.defectRate < 95, 'silver', 'quality')
+    addBadge(user.percentiles.defectRate >= 75 && user.percentiles.defectRate < 90, 'bronze', 'quality')
+
+    // Speed/throughput badges
+    addBadge(user.percentiles.assembledInst >= 95, 'gold', 'speed')
+    addBadge(user.percentiles.assembledInst >= 90 && user.percentiles.assembledInst < 95, 'silver', 'speed')
+    addBadge(user.percentiles.assembledInst >= 75 && user.percentiles.assembledInst < 90, 'bronze', 'speed')
+
+    // Decon badges
+    addBadge(user.pillarPercentiles.decon >= 95, 'gold', 'decon')
+    addBadge(user.pillarPercentiles.decon >= 90 && user.pillarPercentiles.decon < 95, 'silver', 'decon')
+    addBadge(user.pillarPercentiles.decon >= 75 && user.pillarPercentiles.decon < 90, 'bronze', 'decon')
+
+    // Sterilize badges
+    addBadge(user.pillarPercentiles.sterilize >= 95, 'gold', 'sterilize')
+    addBadge(user.pillarPercentiles.sterilize >= 90 && user.pillarPercentiles.sterilize < 95, 'silver', 'sterilize')
+    addBadge(user.pillarPercentiles.sterilize >= 75 && user.pillarPercentiles.sterilize < 90, 'bronze', 'sterilize')
+
+    // Multi-pillar badges
+    addBadge(pillarCount >= 3, 'gold', 'multi')
+    addBadge(pillarCount === 2, 'silver', 'multi')
+
+    const badges: Badge[] = badgeCandidates.map(({ category, tier }) => ({
+      label: pickBySeed(STRENGTH_TITLES[category], `${userSeed}-${category}-strength`),
+      tier,
+      category,
+    }))
 
     const [strength] = [...DEFAULT_METRICS]
       .map((metric) => ({

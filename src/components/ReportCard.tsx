@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import {
   Bar,
   BarChart,
@@ -12,7 +13,7 @@ import {
   YAxis,
 } from 'recharts'
 import { DEFAULT_METRICS, formatMetricValue } from '../utils/metrics'
-import type { MetricDefinition, MetricKey, PillarTotals, UserRecord } from '../utils/metrics'
+import type { BadgeTier, MetricDefinition, MetricKey, PillarTotals, UserRecord } from '../utils/metrics'
 
 type ReportCardProps = {
   user: UserRecord
@@ -93,12 +94,14 @@ const OverallScoreBlock = ({ score, percentile }: { score: number; percentile: n
       <div className="text-xs uppercase tracking-[0.18em] text-muted">
         Overall Processing Score
       </div>
-      <div className="mt-2 flex items-baseline justify-center gap-2">
-        <div className={`text-3xl font-semibold ${colorClass}`}>{score.toFixed(0)}</div>
-        <div className="text-xs font-medium text-muted">
+      <div className="mt-3 flex flex-col items-center gap-1">
+        <div className={`text-5xl font-semibold leading-none ${colorClass}`}>
           {rounded}
-          {suffix} Percentile
+          <span className="ml-1 text-lg font-medium text-muted">{suffix}</span>
         </div>
+        <div className="text-sm font-medium text-muted">Percentile</div>
+        <div className="mt-1 text-2xl font-semibold text-ink/80">{score.toFixed(0)}</div>
+        <div className="text-xs uppercase tracking-[0.18em] text-muted">Overall score</div>
       </div>
     </div>
   )
@@ -147,6 +150,39 @@ const metricHelper = (metric: MetricDefinition) => {
   return ''
 }
 
+const TIER_STYLES: Record<BadgeTier, { bg: string; border: string; text: string; icon: string }> = {
+  bronze: {
+    bg: 'bg-amber-50',
+    border: 'border-amber-300',
+    text: 'text-amber-800',
+    icon: '🥉',
+  },
+  silver: {
+    bg: 'bg-slate-50',
+    border: 'border-slate-300',
+    text: 'text-slate-700',
+    icon: '🥈',
+  },
+  gold: {
+    bg: 'bg-yellow-50',
+    border: 'border-yellow-400',
+    text: 'text-yellow-800',
+    icon: '🥇',
+  },
+}
+
+const BadgeChip = ({ badge }: { badge: import('../utils/metrics').Badge }) => {
+  const styles = TIER_STYLES[badge.tier]
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${styles.bg} ${styles.border} ${styles.text}`}
+    >
+      <span>{styles.icon}</span>
+      {badge.label}
+    </span>
+  )
+}
+
 const ReportCard = ({
   user,
   medians,
@@ -162,8 +198,13 @@ const ReportCard = ({
   const displayName = anonymize ? user.techLabel : user.name
   const deconLabel = shortPillarLabels ? 'Decon' : 'Decontamination'
   const hasNoHoursWorked = hoursWorkedAvailable && user.hoursWorked <= 0
+  const chartPatternId = useId().replace(/:/g, '')
+  const medianPatternId = `${chartPatternId}-median-bar`
+  const userPatternId = `${chartPatternId}-user-bar`
 
-  const comparisonItems = DEFAULT_METRICS.map((metric) => {
+  const comparisonItems = DEFAULT_METRICS.filter(
+    (metric) => hoursWorkedAvailable || metric.key !== 'workedHoursPerUnit',
+  ).map((metric) => {
     const value = user.metrics[metric.key]
     const median = medians[metric.key]
     return {
@@ -209,15 +250,56 @@ const ReportCard = ({
     ? (user.pillarTotals.sterilize / totalPillarActivity) * 100
     : 0
 
-  const itemsPerLoad = user.metrics.sterilizerLoads
-    ? user.metrics.itemsSterilized / Math.max(user.metrics.sterilizerLoads, 1)
-    : 0
 
   const productivityDrivers = [
     { key: 'assembly', label: 'Assembly', value: user.productivityDrivers.assembly },
     { key: 'sterilize', label: 'Sterilize', value: user.productivityDrivers.sterilize },
     { key: 'decon', label: 'Decontamination', value: user.productivityDrivers.decon },
   ].sort((a, b) => b.value - a.value)
+
+  const timekeepingChips = [
+    {
+      key: 'pto',
+      label: 'PTO',
+      value: user.timekeepingContext.ptoHours,
+    },
+    {
+      key: 'unpaid',
+      label: 'Unpaid',
+      value: user.timekeepingContext.unpaidHours,
+    },
+    {
+      key: 'on-call',
+      label: 'On-call',
+      value: user.timekeepingContext.onCallHours,
+    },
+    {
+      key: 'ot',
+      label: 'OT',
+      value: user.timekeepingContext.overtimeHours,
+    },
+  ].filter((item) => item.value > 0)
+
+  const qualityChips = [
+    {
+      key: 'events',
+      label: 'Quality hits',
+      value: user.qualityContext.eventCount,
+    },
+    {
+      key: 'audits',
+      label: 'Audit fails / checks',
+      value:
+        user.qualityContext.auditChecks > 0
+          ? `${user.qualityContext.auditFails}/${user.qualityContext.auditChecks}`
+          : null,
+    },
+    {
+      key: 'coaching',
+      label: 'Coaching',
+      value: user.qualityContext.coachingCount,
+    },
+  ].filter((item) => item.value !== null && item.value !== 0)
 
   const interactiveClasses = interactive
     ? 'cursor-pointer transition hover:-translate-y-0.5 hover:shadow-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60'
@@ -250,6 +332,11 @@ const ReportCard = ({
         <div>
           <div className="text-xs uppercase tracking-[0.2em] text-muted">Report Card</div>
           <h3 className="mt-2 text-2xl font-semibold text-ink">{displayName}</h3>
+          {user.role ? (
+            <div className="mt-1 text-xs font-medium uppercase tracking-[0.12em] text-muted">
+              {user.role}
+            </div>
+          ) : null}
           <div className="mt-1 text-sm text-muted">
             {hoursWorkedAvailable
               ? `Hours Worked: ${user.hoursWorked.toFixed(1)}`
@@ -285,7 +372,7 @@ const ReportCard = ({
             percentile={user.scores.productivityPercentile}
           />
           <MetricScoreBlock
-            label="Quality (Defect)"
+            label="Defect Rate"
             percentile={user.percentiles.defectRate}
           />
           <MetricScoreBlock
@@ -294,6 +381,52 @@ const ReportCard = ({
           />
         </div>
       </div>
+
+      {timekeepingChips.length > 0 || qualityChips.length > 0 ? (
+        <section className="space-y-3">
+          <h4 className="text-sm font-semibold text-ink">Context</h4>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl border border-ink/10 bg-white/85 p-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
+                Timekeeping
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {timekeepingChips.length > 0 ? (
+                  timekeepingChips.map((chip) => (
+                    <span
+                      key={chip.key}
+                      className="rounded-full border border-ink/10 bg-brand/10 px-2.5 py-1 text-xs font-medium text-ink"
+                    >
+                      {chip.label} {chip.value.toFixed(1)}h
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-muted">No additional timekeeping context.</span>
+                )}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-ink/10 bg-white/85 p-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
+                Quality Inputs
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {qualityChips.length > 0 ? (
+                  qualityChips.map((chip) => (
+                    <span
+                      key={chip.key}
+                      className="rounded-full border border-ink/10 bg-accent/10 px-2.5 py-1 text-xs font-medium text-ink"
+                    >
+                      {chip.label} {chip.value}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-muted">No person-level quality context found.</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section>
         <div className="flex items-center justify-between">
@@ -337,10 +470,8 @@ const ReportCard = ({
         <h4 className="text-sm font-semibold text-ink">Badges</h4>
         {user.badges.length ? (
           <div className="flex flex-wrap gap-2">
-            {user.badges.slice(0, 4).map((badge) => (
-              <span key={badge} className="tag">
-                {badge}
-              </span>
+            {user.badges.map((badge) => (
+              <BadgeChip key={`${badge.category}-${badge.tier}`} badge={badge} />
             ))}
           </div>
         ) : (
@@ -431,12 +562,54 @@ const ReportCard = ({
 
       <section className="grid gap-4 md:grid-cols-2">
         <div className="rounded-2xl border border-ink/10 bg-white/85 p-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">
-            User vs median
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+              User vs median
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-3 text-[10px] font-medium uppercase tracking-[0.12em] text-muted">
+              <span className="inline-flex items-center gap-2">
+                <span
+                  className="h-3 w-5 rounded-sm border border-ink/70"
+                  style={{ background: '#334155' }}
+                />
+                User
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <span
+                  className="h-3 w-5 rounded-sm border border-ink/70"
+                  style={{
+                    backgroundColor: '#f8fafc',
+                    backgroundImage:
+                      'repeating-linear-gradient(135deg, rgba(71, 85, 105, 0.9) 0 2px, transparent 2px 5px)',
+                  }}
+                />
+                Median
+              </span>
+            </div>
           </div>
           <div className="mt-3 h-32">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData} barSize={18} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                  <pattern
+                    id={userPatternId}
+                    width="6"
+                    height="6"
+                    patternUnits="userSpaceOnUse"
+                  >
+                    <rect width="6" height="6" fill="#334155" />
+                  </pattern>
+                  <pattern
+                    id={medianPatternId}
+                    width="8"
+                    height="8"
+                    patternUnits="userSpaceOnUse"
+                    patternTransform="rotate(135)"
+                  >
+                    <rect width="8" height="8" fill="#f8fafc" />
+                    <line x1="0" y1="0" x2="0" y2="8" stroke="#475569" strokeWidth="3" />
+                  </pattern>
+                </defs>
                 <XAxis dataKey="name" tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 10 }} />
                 <Tooltip
@@ -447,8 +620,20 @@ const ReportCard = ({
                     return [formatted, name]
                   }}
                 />
-                <Bar dataKey="Median" fill="#94a3b8" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="User" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                <Bar
+                  dataKey="Median"
+                  fill={`url(#${medianPatternId})`}
+                  stroke="#475569"
+                  strokeWidth={1}
+                  radius={[6, 6, 0, 0]}
+                />
+                <Bar
+                  dataKey="User"
+                  fill={`url(#${userPatternId})`}
+                  stroke="#334155"
+                  strokeWidth={1}
+                  radius={[6, 6, 0, 0]}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -470,22 +655,7 @@ const ReportCard = ({
         </div>
       </section>
 
-      <section className="space-y-3">
-        <h4 className="text-sm font-semibold text-ink">Operational adds</h4>
-        <div className="grid gap-2 sm:grid-cols-1">
-          <div className="metric-chip">
-            <div className="flex items-center justify-between text-xs text-muted">
-              <span>Items per Load</span>
-            </div>
-            <div className="mt-2 text-lg font-semibold text-ink">
-              {itemsPerLoad.toFixed(1)}
-            </div>
-            <div className="text-[10px] text-muted">Items sterilized / load</div>
-          </div>
-        </div>
-      </section>
-
-      <footer className="rounded-2xl border border-ink/10 bg-white/85 p-4 text-sm text-muted">
+<footer className="rounded-2xl border border-ink/10 bg-white/85 p-4 text-sm text-muted">
         {user.coachingSummary}
       </footer>
     </article>
