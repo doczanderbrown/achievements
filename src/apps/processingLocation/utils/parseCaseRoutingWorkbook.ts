@@ -37,9 +37,6 @@ const PRE_WINDOW_DAYS = 1
 const POST_WINDOW_DAYS = 14
 const POST_SCAN_WINDOW_DAYS = 30
 
-  return cells
-}
-
 const createWorksheetRowParser = (
   targetCols: Set<string>,
   onRow: (rowNumber: number, cells: ParsedCells) => void,
