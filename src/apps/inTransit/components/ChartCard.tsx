@@ -15,9 +15,10 @@ type ChartCardProps = {
   data: { name: string; value: number }[];
   height?: number;
   footer?: ReactNode;
+  emptyMessage?: string;
 };
 
-const ChartCard = ({ title, subtitle, data, height = 240, footer }: ChartCardProps) => {
+const ChartCard = ({ title, subtitle, data, height = 240, footer, emptyMessage }: ChartCardProps) => {
   return (
     <div className="rounded-3xl border border-stroke bg-card/90 p-4 shadow-soft">
       <div className="flex items-start justify-between">
@@ -28,7 +29,9 @@ const ChartCard = ({ title, subtitle, data, height = 240, footer }: ChartCardPro
       </div>
       <div className="mt-4" style={{ height }}>
         {data.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted">No data</div>
+          <div className="flex h-full items-center justify-center text-sm text-muted">
+            {emptyMessage ?? 'No data to display'}
+          </div>
         ) : (
           <ResponsiveContainer width="100%" height={height}>
             <BarChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>

@@ -15,16 +15,24 @@ const sortSelected = (values: string[], options: string[]) => {
 const MultiSelect = ({ label, options, selected, onChange }: MultiSelectProps) => {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const id = `multiselect-${label.toLowerCase().replace(/\s+/g, '-')}`;
 
   useEffect(() => {
-    const handler = (event: MouseEvent) => {
+    const handlePointer = (event: MouseEvent) => {
       if (!containerRef.current) return;
       if (event.target instanceof Node && !containerRef.current.contains(event.target)) {
         setOpen(false);
       }
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('keydown', handleKey);
+    };
   }, []);
 
   const toggleOption = (option: string) => {
@@ -39,16 +47,33 @@ const MultiSelect = ({ label, options, selected, onChange }: MultiSelectProps) =
 
   return (
     <div className="relative" ref={containerRef}>
-      <button
-        type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        className="flex w-full items-center justify-between gap-3 rounded-full border border-stroke bg-white px-4 py-2 text-sm font-medium shadow-soft transition hover:shadow-lift"
-      >
-        <span className="text-muted">{label}</span>
-        <span className="text-ink">{summary}</span>
-      </button>
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor={`${id}-btn`}
+          className="text-[10px] uppercase tracking-[0.3em] text-muted"
+        >
+          {label}
+        </label>
+        <button
+          id={`${id}-btn`}
+          type="button"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-label={`${label}: ${summary}`}
+          onClick={() => setOpen((prev) => !prev)}
+          className="flex w-full items-center justify-between gap-3 rounded-full border border-stroke bg-white px-4 py-2 text-sm font-medium shadow-soft transition hover:shadow-lift"
+        >
+          <span className="text-muted">{label}</span>
+          <span className="text-ink">{summary}</span>
+        </button>
+      </div>
       {open ? (
-        <div className="absolute z-20 mt-2 w-64 rounded-3xl border border-stroke bg-card p-3 shadow-lift">
+        <div
+          role="listbox"
+          aria-multiselectable="true"
+          aria-label={label}
+          className="absolute z-20 mt-2 w-64 rounded-3xl border border-stroke bg-card p-3 shadow-lift"
+        >
           <div className="flex items-center justify-between text-[11px] text-muted">
             <button
               type="button"
@@ -70,7 +95,12 @@ const MultiSelect = ({ label, options, selected, onChange }: MultiSelectProps) =
               <div className="text-sm text-muted">No options</div>
             ) : (
               options.map((option) => (
-                <label key={option} className="flex cursor-pointer items-center gap-2 text-sm">
+                <label
+                  key={option}
+                  role="option"
+                  aria-selected={selected.includes(option)}
+                  className="flex cursor-pointer items-center gap-2 text-sm"
+                >
                   <input
                     type="checkbox"
                     checked={selected.includes(option)}

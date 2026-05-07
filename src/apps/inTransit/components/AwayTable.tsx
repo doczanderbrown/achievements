@@ -20,6 +20,17 @@ type AwayTableProps = {
   overdueThresholdDays: number;
 };
 
+const COLUMN_LABELS: Record<SortKey, string> = {
+  age: 'Age',
+  owningTower: 'Owning Tower',
+  invID: 'Inv ID',
+  desc: 'Description',
+  lastScanFacility: 'Last Scan Facility',
+  currentStorageLocation: 'Storage Location',
+  lastScanBy: 'Scanned By',
+  lastScanAt: 'Last Scan',
+};
+
 const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
   const [sortKey, setSortKey] = useState<SortKey>('age');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -28,10 +39,10 @@ const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
   const sortOptions: { label: string; key: SortKey; direction: 'asc' | 'desc' }[] = [
     { label: 'Age: youngest to oldest', key: 'age', direction: 'asc' },
     { label: 'Age: oldest to youngest', key: 'age', direction: 'desc' },
-    { label: 'Owning tower A-Z', key: 'owningTower', direction: 'asc' },
-    { label: 'Owning tower Z-A', key: 'owningTower', direction: 'desc' },
-    { label: 'Storage location A-Z', key: 'currentStorageLocation', direction: 'asc' },
-    { label: 'Storage location Z-A', key: 'currentStorageLocation', direction: 'desc' },
+    { label: 'Owning tower A–Z', key: 'owningTower', direction: 'asc' },
+    { label: 'Owning tower Z–A', key: 'owningTower', direction: 'desc' },
+    { label: 'Storage location A–Z', key: 'currentStorageLocation', direction: 'asc' },
+    { label: 'Storage location Z–A', key: 'currentStorageLocation', direction: 'desc' },
   ];
 
   const selectedSortValue = `${sortKey}:${sortDirection}`;
@@ -92,10 +103,26 @@ const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
     setSortDirection(direction);
   };
 
-  const sortIndicator = (key: SortKey) => {
-    if (key !== sortKey) return '';
-    return sortDirection === 'asc' ? '^' : 'v';
+  const sortArrow = (key: SortKey) => {
+    if (key !== sortKey) return null;
+    return <span aria-hidden="true">{sortDirection === 'asc' ? ' ↑' : ' ↓'}</span>;
   };
+
+  const ariaSortFor = (key: SortKey): 'ascending' | 'descending' | 'none' => {
+    if (key !== sortKey) return 'none';
+    return sortDirection === 'asc' ? 'ascending' : 'descending';
+  };
+
+  const columns: SortKey[] = [
+    'age',
+    'owningTower',
+    'invID',
+    'desc',
+    'lastScanFacility',
+    'currentStorageLocation',
+    'lastScanBy',
+    'lastScanAt',
+  ];
 
   return (
     <div className="space-y-6">
@@ -110,8 +137,9 @@ const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
               Overdue ≥ {overdueThresholdDays}d
             </span>
             <div className="flex items-center gap-2">
-              <span>Sort</span>
+              <label htmlFor="away-sort" className="sr-only">Sort by</label>
               <select
+                id="away-sort"
                 value={selectedSortValue}
                 onChange={(event) => handleSortSelect(event.target.value)}
                 className="rounded-full border border-stroke bg-white px-3 py-1 text-[11px]"
@@ -129,37 +157,32 @@ const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
           <table className="w-full text-left text-sm">
             <thead className="bg-orange-50 text-[10px] uppercase tracking-[0.3em] text-muted">
               <tr>
-                <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort('age')}>
-                  Age {sortIndicator('age')}
-                </th>
-                <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort('owningTower')}>
-                  Owning tower {sortIndicator('owningTower')}
-                </th>
-                <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort('invID')}>
-                  invID {sortIndicator('invID')}
-                </th>
-                <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort('desc')}>
-                  Desc {sortIndicator('desc')}
-                </th>
-                <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort('lastScanFacility')}>
-                  LastScanFacility {sortIndicator('lastScanFacility')}
-                </th>
-                <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort('currentStorageLocation')}>
-                  CurrentStorageLocation {sortIndicator('currentStorageLocation')}
-                </th>
-                <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort('lastScanBy')}>
-                  LastScanBy {sortIndicator('lastScanBy')}
-                </th>
-                <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort('lastScanAt')}>
-                  LastScanAt {sortIndicator('lastScanAt')}
-                </th>
+                {columns.map((col) => (
+                  <th
+                    key={col}
+                    scope="col"
+                    aria-sort={ariaSortFor(col)}
+                    className="px-3 py-2"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort(col)}
+                      className="flex items-center whitespace-nowrap hover:text-ink"
+                    >
+                      {COLUMN_LABELS[col]}
+                      {sortArrow(col)}
+                    </button>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {sortedItems.length === 0 ? (
                 <tr>
-                  <td className="px-3 py-6 text-sm text-muted" colSpan={8}>
-                    Upload a workbook to view away inventory.
+                  <td className="px-3 py-8 text-center text-sm text-muted" colSpan={columns.length}>
+                    {items.length === 0
+                      ? 'Upload a workbook to view away inventory.'
+                      : 'No items match the current filters.'}
                   </td>
                 </tr>
               ) : (
@@ -168,16 +191,20 @@ const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
                     key={`${item.sheetType}-${item.invID}-${item.lastScanLoc}-${index}`}
                     className="cursor-pointer border-t border-stroke transition hover:bg-orange-50"
                     onClick={() => setSelected(item)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelected(item) }}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`View details for ${item.invID || 'inventory item'}`}
                   >
                     <td className="px-3 py-2 font-medium">{formatDuration(item.ageMs, item.lastScanAgoRaw)}</td>
                     <td className="px-3 py-2">{item.owningTower}</td>
                     <td className="px-3 py-2">{item.invID}</td>
                     <td className="px-3 py-2">
-                      <span className="line-clamp-2">{item.desc || 'No description'}</span>
+                      <span className="line-clamp-2">{item.desc || '—'}</span>
                     </td>
-                    <td className="px-3 py-2">{item.lastScanFacility || 'Unknown'}</td>
+                    <td className="px-3 py-2">{item.lastScanFacility || '—'}</td>
                     <td className="px-3 py-2">
-                      <div className="text-sm">{item.currentStorageLocation || 'Unknown'}</div>
+                      <div className="text-sm">{item.currentStorageLocation || '—'}</div>
                       <div className="mt-2">
                         <FlowIndicator
                           mode="away"
@@ -187,7 +214,7 @@ const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
                         />
                       </div>
                     </td>
-                    <td className="px-3 py-2">{item.lastScanBy || 'Unknown'}</td>
+                    <td className="px-3 py-2">{item.lastScanBy || '—'}</td>
                     <td className="px-3 py-2">{formatDateTime(item.lastScanAt)}</td>
                   </tr>
                 ))
@@ -206,7 +233,7 @@ const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
           <div className="space-y-3 text-sm">
             <div>
               <div className="text-xs uppercase tracking-[0.2em] text-muted">Description</div>
-              <div className="mt-1 text-base font-semibold text-ink">{selected.desc || 'No description'}</div>
+              <div className="mt-1 text-base font-semibold text-ink">{selected.desc || '—'}</div>
             </div>
             <div className="grid gap-2 md:grid-cols-2">
               <div>
@@ -220,21 +247,21 @@ const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
                 </div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-[0.2em] text-muted">LastScanFacility</div>
-                <div className="mt-1 font-medium text-ink">{selected.lastScanFacility || 'Unknown'}</div>
+                <div className="text-xs uppercase tracking-[0.2em] text-muted">Last scan facility</div>
+                <div className="mt-1 font-medium text-ink">{selected.lastScanFacility || '—'}</div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-[0.2em] text-muted">CurrentStorageLocation</div>
+                <div className="text-xs uppercase tracking-[0.2em] text-muted">Storage location</div>
                 <div className="mt-1 font-medium text-ink">
-                  {selected.currentStorageLocation || 'Unknown'}
+                  {selected.currentStorageLocation || '—'}
                 </div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-[0.2em] text-muted">LastScanBy</div>
-                <div className="mt-1 font-medium text-ink">{selected.lastScanBy || 'Unknown'}</div>
+                <div className="text-xs uppercase tracking-[0.2em] text-muted">Scanned by</div>
+                <div className="mt-1 font-medium text-ink">{selected.lastScanBy || '—'}</div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-[0.2em] text-muted">LastScanAt</div>
+                <div className="text-xs uppercase tracking-[0.2em] text-muted">Last scan</div>
                 <div className="mt-1 font-medium text-ink">{formatDateTime(selected.lastScanAt)}</div>
               </div>
               <div>
@@ -242,8 +269,8 @@ const AwayTable = ({ items, overdueThresholdDays }: AwayTableProps) => {
                 <div className="mt-1 font-medium text-ink">{selected.ageBucket}</div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-[0.2em] text-muted">InvID</div>
-                <div className="mt-1 font-medium text-ink">{selected.invID || 'Unknown'}</div>
+                <div className="text-xs uppercase tracking-[0.2em] text-muted">Inv ID</div>
+                <div className="mt-1 font-medium text-ink">{selected.invID || '—'}</div>
               </div>
             </div>
           </div>

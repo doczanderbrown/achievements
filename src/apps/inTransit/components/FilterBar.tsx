@@ -13,9 +13,15 @@ const FilterBar = ({ filters, towers, buckets, onChange }: FilterBarProps) => {
   return (
     <div className="grid gap-3 rounded-3xl border border-stroke bg-card/85 p-4 shadow-soft backdrop-blur lg:grid-cols-[1.2fr_1fr_1fr_auto_auto]">
       <div className="flex flex-col gap-1">
-        <label className="text-[10px] uppercase tracking-[0.3em] text-muted">Search</label>
+        <label
+          htmlFor="transit-search"
+          className="text-[10px] uppercase tracking-[0.3em] text-muted"
+        >
+          Search
+        </label>
         <input
-          type="text"
+          id="transit-search"
+          type="search"
           value={filters.search}
           onChange={(event) => onChange({ ...filters, search: event.target.value })}
           placeholder="Search invID or description"
