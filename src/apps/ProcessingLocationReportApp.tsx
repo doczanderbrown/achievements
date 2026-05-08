@@ -774,11 +774,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
 
     rows.sort((a, b) => b.dateSerial - a.dateSerial)
 
-    const topPairs = Array.from(pairCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([pair, count]) => ({ pair, count }))
-
-    // Group by processing facility: which home facilities' items did each site process?
+    // Group by processing facility → home facility
     const procFacilityMap = new Map<string, Map<string, number>>()
     for (const row of rows) {
       if (!row.homeFacility) continue
@@ -786,6 +782,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       sourceMap.set(row.homeFacility, (sourceMap.get(row.homeFacility) ?? 0) + 1)
       procFacilityMap.set(row.sterilizedAt, sourceMap)
     }
+
     const byProcFacility = Array.from(procFacilityMap.entries())
       .map(([procFacility, sourceMap]) => ({
         procFacility,
@@ -796,7 +793,24 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       }))
       .sort((a, b) => b.total - a.total)
 
-    return { rows, topPairs, total: rows.length, byProcFacility }
+    // Build stacked bar chart data (one row per processing facility)
+    const allHomeFacilities = [...new Set(
+      byProcFacility.flatMap((e) => e.sources.map((s) => s.homeFacility))
+    )].sort()
+
+    const chartData = byProcFacility.map((entry) => {
+      const row: Record<string, string | number> = {
+        name: entry.procFacility.replace('Endeavor ', ''),
+      }
+      entry.sources.forEach((src) => {
+        row[src.homeFacility.replace('Endeavor ', '')] = src.count
+      })
+      return row
+    })
+
+    const uniqueItems = new Set(rows.map((r) => r.itemName)).size
+
+    return { rows, total: rows.length, byProcFacility, allHomeFacilities, chartData, uniqueItems }
   }, [dataset, dateRangeSerials, selectedFacilities, ownerLabelById, specialtyLabelById, itemTypeLabelById])
 
   const caseRoutingAnalytics = useMemo(() => {
@@ -1472,15 +1486,6 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                 <>
                   <button
                     type="button"
-                    onClick={() => setActiveTab('dept-mix')}
-                    className={`rounded-full border px-4 py-2 text-sm font-medium ${
-                      activeTab === 'dept-mix' ? 'border-ink bg-ink text-white' : 'border-ink/20 bg-white text-ink'
-                    }`}
-                  >
-                    Dept. Mix
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setActiveTab('cross-site')}
                     className={`rounded-full border px-4 py-2 text-sm font-medium ${
                       activeTab === 'cross-site' ? 'border-ink bg-ink text-white' : 'border-ink/20 bg-white text-ink'
@@ -2091,57 +2096,105 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
               </>
             ) : null}
 
-            {activeTab === 'cross-site' && crossSiteAnalytics ? (
+            {activeTab === 'cross-site' && crossSiteAnalytics && crossSiteAnalytics.total > 0 ? (
               <>
-                {crossSiteAnalytics.byProcFacility.length > 0 ? (
-                  <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
-                    <div className="text-sm font-semibold text-ink">Which facility processed whose items?</div>
-                    <p className="mt-1 text-sm text-muted">
-                      Each processing facility and the items it sterilized that belong to other facilities.
-                    </p>
-                    <div className="mt-4 space-y-6">
-                      {crossSiteAnalytics.byProcFacility.map((procEntry) => (
-                        <div key={procEntry.procFacility}>
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">
-                              {procEntry.procFacility}
-                            </span>
-                            <span className="text-sm text-muted">processed {procEntry.total.toLocaleString()} items owned by other facilities</span>
-                          </div>
-                          <div className="mt-2 overflow-auto">
-                            <table className="min-w-full text-sm">
-                              <thead>
-                                <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
-                                  <th className="px-3 py-1">Owned By</th>
-                                  <th className="px-3 py-1">Items Processed Here</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {procEntry.sources.map((src) => (
-                                  <tr key={src.homeFacility} className="border-t border-ink/10">
-                                    <td className="px-3 py-2">
-                                      <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
-                                        {src.homeFacility}
-                                      </span>
-                                    </td>
-                                    <td className="px-3 py-2 font-semibold text-ink">{src.count.toLocaleString()}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      ))}
+                {/* Summary cards */}
+                <section className="grid gap-4 md:grid-cols-3">
+                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Total Cross-Facility Events</div>
+                    <div className="mt-2 text-2xl font-semibold text-ink">{crossSiteAnalytics.total.toLocaleString()}</div>
+                    <div className="mt-1 text-sm text-muted">In selected date window</div>
+                  </article>
+                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Unique Items</div>
+                    <div className="mt-2 text-2xl font-semibold text-ink">{crossSiteAnalytics.uniqueItems.toLocaleString()}</div>
+                  </article>
+                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Facility Pairs</div>
+                    <div className="mt-2 text-2xl font-semibold text-ink">
+                      {crossSiteAnalytics.byProcFacility.reduce((s, e) => s + e.sources.length, 0)}
                     </div>
-                  </section>
-                ) : null}
+                    <div className="mt-1 text-sm text-muted">Distinct processed-at / owned-by combinations</div>
+                  </article>
+                </section>
 
+                {/* Stacked bar chart */}
+                <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
+                  <div className="text-sm font-semibold text-ink">Items Processed at Each Facility — by Owning Facility</div>
+                  <p className="mt-1 text-sm text-muted">
+                    Each bar is a processing facility. Segments show how many items belonged to each other facility.
+                  </p>
+                  <div className="mt-4" style={{ height: `${Math.max(240, crossSiteAnalytics.byProcFacility.length * 56)}px` }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={crossSiteAnalytics.chartData} layout="vertical" margin={{ left: 8, right: 48, top: 8, bottom: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(100,116,139,0.2)" />
+                        <XAxis type="number" allowDecimals={false} />
+                        <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 11 }} />
+                        <Tooltip />
+                        <Legend />
+                        {crossSiteAnalytics.allHomeFacilities.map((fac, idx) => {
+                          const colors = ['#f97316','#3b82f6','#10b981','#8b5cf6','#ec4899','#14b8a6','#f59e0b','#6366f1','#ef4444']
+                          return (
+                            <Bar
+                              key={fac}
+                              dataKey={fac.replace('Endeavor ', '')}
+                              stackId="a"
+                              fill={colors[idx % colors.length]}
+                              name={fac.replace('Endeavor ', '')}
+                            />
+                          )
+                        })}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </section>
+
+                {/* Pair summary table */}
+                <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
+                  <div className="text-sm font-semibold text-ink">Cross-Facility Summary</div>
+                  <p className="mt-1 text-sm text-muted">Every facility pair — processed at / owned by — and how many items.</p>
+                  <div className="mt-4 overflow-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
+                          <th className="px-3 py-2 text-accent">Processed At</th>
+                          <th className="px-3 py-2 text-brand">Owned By</th>
+                          <th className="px-3 py-2">Items</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {crossSiteAnalytics.byProcFacility.flatMap((entry) =>
+                          entry.sources.map((src, srcIdx) => (
+                            <tr key={`${entry.procFacility}-${src.homeFacility}`} className={srcIdx === 0 ? 'border-t-2 border-ink/20' : 'border-t border-ink/10'}>
+                              <td className="px-3 py-2">
+                                {srcIdx === 0 ? (
+                                  <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent">
+                                    {entry.procFacility}
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-2">
+                                <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-semibold text-brand">
+                                  {src.homeFacility}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 font-semibold text-ink">{src.count.toLocaleString()}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                {/* Detail table — matches NCHSterilizeNotAtHome format */}
                 <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-ink">Cross-Site Item Detail</div>
+                      <div className="text-sm font-semibold text-ink">Item Detail</div>
                       <p className="mt-1 text-sm text-muted">
-                        Items sterilized at a facility other than their registered home location. Sorted by most recent first.
+                        Every item sterilized outside its home facility, sorted most-recent first.
+                        {crossSiteAnalytics.total > 1000 ? ` Showing first 1,000 of ${crossSiteAnalytics.total.toLocaleString()} — export for full list.` : ''}
                       </p>
                     </div>
                     <button
@@ -2159,14 +2212,13 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           <th className="px-2 py-2">Date</th>
                           <th className="px-2 py-2">Item Name</th>
                           <th className="px-2 py-2 text-brand">Home Facility</th>
-                          <th className="px-2 py-2 text-accent">Sterilized At</th>
+                          <th className="px-2 py-2 text-accent">Processed At</th>
                           <th className="px-2 py-2">Department</th>
-                          <th className="px-2 py-2">Specialty</th>
                           <th className="px-2 py-2">Method</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {crossSiteAnalytics.rows.slice(0, 500).map((row, idx) => (
+                        {crossSiteAnalytics.rows.slice(0, 1000).map((row, idx) => (
                           <tr key={`cs-${idx}`} className="border-t border-ink/10">
                             <td className="px-2 py-2 text-muted">{row.date}</td>
                             <td className="px-2 py-2 text-ink">{row.itemName}</td>
@@ -2181,17 +2233,11 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                               </span>
                             </td>
                             <td className="px-2 py-2 text-muted">{row.dept}</td>
-                            <td className="px-2 py-2 text-muted">{row.specialty}</td>
                             <td className="px-2 py-2 text-muted">{row.method}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                    {crossSiteAnalytics.total > 500 ? (
-                      <div className="mt-3 text-center text-xs text-muted">
-                        Showing first 500 of {crossSiteAnalytics.total.toLocaleString()} rows — use Export Excel for the full list.
-                      </div>
-                    ) : null}
                   </div>
                 </section>
               </>
@@ -2199,7 +2245,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
 
             {activeTab === 'cross-site' && (!crossSiteAnalytics || crossSiteAnalytics.total === 0) ? (
               <section className="rounded-3xl border border-ink/10 bg-white/85 p-8 text-center text-sm text-muted shadow-sm">
-                No cross-site items found for the current facility and date filters.
+                No cross-facility items found. Make sure the workbook includes an Items Details sheet with home facility data.
               </section>
             ) : null}
 
