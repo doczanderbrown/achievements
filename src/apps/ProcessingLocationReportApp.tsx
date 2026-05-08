@@ -5,7 +5,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   Legend,
   ResponsiveContainer,
   Tooltip,
@@ -52,16 +51,6 @@ const DAY_ORDER: Array<{ key: number; label: string }> = [
 ]
 const DAY_LABEL_BY_KEY = new Map(DAY_ORDER.map((day) => [day.key, day.label]))
 
-const isPrimaryDept = (name: string) => {
-  const n = name.trim().toLowerCase()
-  return (
-    n.includes('main or') ||
-    n === 'dsc' ||
-    n.includes('sterile processing') ||
-    n.includes('main spd') ||
-    n.includes('highland park main or')
-  )
-}
 const CASE_ROUTE_LABEL_BY_ID = new Map<number, string>([
   [0, 'HVN On-Site'],
   [1, 'Off-Site'],
@@ -360,7 +349,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       setIncludeOffsiteDispatch(true)
       setIncludeOtherOnsiteDispatch(true)
       setActiveTab(
-        endeavor ? 'dept-mix' : (merged.rows.dateSerials.length > 0 ? 'mix' : merged.caseRouting ? 'case-routing' : 'mix'),
+        endeavor ? 'cross-site' : (merged.rows.dateSerials.length > 0 ? 'mix' : merged.caseRouting ? 'case-routing' : 'mix'),
       )
       if (endeavor && merged.facilityOptions.length > 0) {
         const nchIds = merged.facilityOptions
@@ -694,107 +683,53 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
     const facilitySet = selectedFacilities.length > 0 ? new Set(selectedFacilities) : null
     const ownerLabels = new Map(dataset.owners.map((o) => [o.id, o.label]))
 
-    type OtherItemEntry = { total: number; depts: Map<number, number>; procFacilities: Map<number, number> }
-
-    const facilityCounts = new Map<number, Map<number, number>>()
-    const overallOtherItemMap = new Map<number, OtherItemEntry>()
-    const facilityOtherItemMap = new Map<number, Map<number, OtherItemEntry>>()
+    // facilityId → { ownCount, crossFacility: Map<homeFacilityName, {count, depts: Map<ownerId,count>}> }
+    type CrossEntry = { count: number; depts: Map<number, number> }
+    const byProcFacility = new Map<number, { ownCount: number; total: number; cross: Map<string, CrossEntry> }>()
 
     for (let i = 0; i < dataset.rows.dateSerials.length; i += 1) {
       const dateSerial = dataset.rows.dateSerials[i]
       if (dateSerial < dateRangeSerials.startSerial || dateSerial > dateRangeSerials.endSerial) continue
       const facilityId = dataset.rows.facilityIds[i]
       if (facilitySet && !facilitySet.has(facilityId)) continue
-      const ownerId = dataset.rows.ownerIds[i]
 
-      let deptMap = facilityCounts.get(facilityId)
-      if (!deptMap) { deptMap = new Map(); facilityCounts.set(facilityId, deptMap) }
-      deptMap.set(ownerId, (deptMap.get(ownerId) ?? 0) + 1)
+      let entry = byProcFacility.get(facilityId)
+      if (!entry) { entry = { ownCount: 0, total: 0, cross: new Map() }; byProcFacility.set(facilityId, entry) }
+      entry.total += 1
 
-      const deptName = ownerLabels.get(ownerId) ?? 'Unspecified'
-      if (!isPrimaryDept(deptName)) {
+      const isOffsite = dataset.rows.offsiteFlags[i] === 1
+      if (!isOffsite) {
+        entry.ownCount += 1
+      } else {
         const setNameId = dataset.rows.setNameIds[i]
-
-        const existing = overallOtherItemMap.get(setNameId) ?? { total: 0, depts: new Map(), procFacilities: new Map() }
-        existing.total += 1
-        existing.depts.set(ownerId, (existing.depts.get(ownerId) ?? 0) + 1)
-        existing.procFacilities.set(facilityId, (existing.procFacilities.get(facilityId) ?? 0) + 1)
-        overallOtherItemMap.set(setNameId, existing)
-
-        let facItemMap = facilityOtherItemMap.get(facilityId)
-        if (!facItemMap) { facItemMap = new Map(); facilityOtherItemMap.set(facilityId, facItemMap) }
-        const facExisting = facItemMap.get(setNameId) ?? { total: 0, depts: new Map(), procFacilities: new Map() }
-        facExisting.total += 1
-        facExisting.depts.set(ownerId, (facExisting.depts.get(ownerId) ?? 0) + 1)
-        facItemMap.set(setNameId, facExisting)
+        const ownerId = dataset.rows.ownerIds[i]
+        const homeFacility = dataset.itemHomeFacilities[setNameId] || 'Unknown'
+        const crossEntry = entry.cross.get(homeFacility) ?? { count: 0, depts: new Map() }
+        crossEntry.count += 1
+        crossEntry.depts.set(ownerId, (crossEntry.depts.get(ownerId) ?? 0) + 1)
+        entry.cross.set(homeFacility, crossEntry)
       }
     }
 
-    const buildTopItems = (
-      itemMap: Map<number, OtherItemEntry>,
-      limit: number,
-      showProcFacility: boolean,
-    ) =>
-      Array.from(itemMap.entries())
-        .sort((a, b) => b[1].total - a[1].total)
-        .slice(0, limit)
-        .map(([setNameId, { total, depts, procFacilities }]) => {
-          const topDepts = Array.from(depts.entries())
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([ownerId, count]) => `${ownerLabels.get(ownerId) ?? 'Unknown'} (${count})`)
-            .join(', ')
-          const topProcFacilities = showProcFacility
-            ? Array.from(procFacilities.entries())
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 2)
-                .map(([fid, count]) => `${dataset.facilities[fid] ?? 'Unknown'} (${count})`)
-                .join(', ')
-            : ''
-          const homeFacility = dataset.itemHomeFacilities[setNameId] ?? ''
-          return {
-            itemName: dataset.setNames[setNameId] ?? 'Unknown Item',
-            total,
-            topDepts,
-            topProcFacilities,
-            homeFacility,
-          }
-        })
-
-    let totalItems = 0
-    let totalOtherItems = 0
-
-    const byFacility = Array.from(facilityCounts.entries())
-      .map(([facilityId, deptMap]) => {
-        const facilityName = dataset.facilities[facilityId] ?? 'Unknown Facility'
-        const totalFacility = Array.from(deptMap.values()).reduce((a, b) => a + b, 0)
-        const topDepts = Array.from(deptMap.entries())
-          .map(([ownerId, count]) => {
-            const deptName = ownerLabels.get(ownerId) ?? 'Unspecified'
-            return { ownerId, deptName, count, isPrimary: isPrimaryDept(deptName) }
+    const result = Array.from(byProcFacility.entries())
+      .map(([facilityId, { ownCount, total, cross }]) => {
+        const facilityName = dataset.facilities[facilityId] ?? 'Unknown'
+        const crossTotal = total - ownCount
+        const crossByHome = Array.from(cross.entries())
+          .map(([homeFacility, { count, depts }]) => {
+            const topDepts = Array.from(depts.entries())
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 4)
+              .map(([ownerId, cnt]) => `${ownerLabels.get(ownerId) ?? 'Unknown'} (${cnt})`)
+              .join(', ')
+            return { homeFacility, count, topDepts }
           })
           .sort((a, b) => b.count - a.count)
-        const primaryCount = topDepts.filter((d) => d.isPrimary).reduce((a, d) => a + d.count, 0)
-        const otherCount = totalFacility - primaryCount
-        totalItems += totalFacility
-        totalOtherItems += otherCount
-        const facItemMap = facilityOtherItemMap.get(facilityId) ?? new Map()
-        return {
-          facilityId,
-          facilityName,
-          totalItems: totalFacility,
-          primaryCount,
-          otherCount,
-          otherRate: toPercent(otherCount, totalFacility),
-          topDepts: topDepts.slice(0, 12),
-          topOtherItems: buildTopItems(facItemMap, 20, false),
-        }
+        return { facilityId, facilityName, total, ownCount, crossTotal, crossByHome }
       })
-      .sort((a, b) => b.totalItems - a.totalItems)
+      .sort((a, b) => b.crossTotal - a.crossTotal)
 
-    const overallTopOtherItems = buildTopItems(overallOtherItemMap, 25, true)
-
-    return { byFacility, totalItems, totalOtherItems, overallOtherRate: toPercent(totalOtherItems, totalItems), overallTopOtherItems }
+    return { result }
   }, [dataset, dateRangeSerials, selectedFacilities])
 
   const crossSiteAnalytics = useMemo(() => {
@@ -2107,140 +2042,54 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
 
             {activeTab === 'dept-mix' && deptMixAnalytics ? (
               <>
-                <section className="grid gap-4 md:grid-cols-3">
-                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
-                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Total Items (Filtered Facilities)</div>
-                    <div className="mt-2 text-2xl font-semibold text-ink">{deptMixAnalytics.totalItems.toLocaleString()}</div>
-                  </article>
-                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
-                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Other Dept Items</div>
-                    <div className="mt-2 text-2xl font-semibold text-ink">{deptMixAnalytics.totalOtherItems.toLocaleString()}</div>
-                    <div className="mt-1 text-sm text-muted">{formatPercent(deptMixAnalytics.overallOtherRate)} of total</div>
-                  </article>
-                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
-                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Facilities Shown</div>
-                    <div className="mt-2 text-2xl font-semibold text-ink">{deptMixAnalytics.byFacility.length}</div>
-                  </article>
-                </section>
+                {deptMixAnalytics.result.map((entry) => (
+                  <section key={entry.facilityId} className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
+                    <div className="flex flex-wrap items-baseline gap-3">
+                      <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">
+                        {entry.facilityName}
+                      </span>
+                      <span className="text-sm text-muted">
+                        {entry.total.toLocaleString()} total items — {entry.ownCount.toLocaleString()} owned here,{' '}
+                        <strong className="text-ink">{entry.crossTotal.toLocaleString()} owned by other facilities</strong>
+                      </span>
+                    </div>
 
-                {deptMixAnalytics.overallTopOtherItems.length > 0 ? (
-                  <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
-                    <div className="text-sm font-semibold text-ink">Top Items from Other Departments (All Selected Facilities)</div>
-                    <p className="mt-1 text-sm text-muted">
-                      Items most frequently processed for non-primary departments (excludes Main OR, Sterile Processing, Main SPD, DSC).
-                    </p>
-                    <div className="mt-4 overflow-auto">
-                      <table className="min-w-full text-sm">
-                        <thead>
-                          <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
-                            <th className="px-2 py-2">#</th>
-                            <th className="px-2 py-2">Item Name</th>
-                            <th className="px-2 py-2 text-brand">Home Facility</th>
-                            <th className="px-2 py-2 text-accent">Processed At</th>
-                            <th className="px-2 py-2">Cycles</th>
-                            <th className="px-2 py-2">Requesting Dept</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {deptMixAnalytics.overallTopOtherItems.map((row, idx) => (
-                            <tr key={`overall-item-${idx}`} className="border-t border-ink/10">
-                              <td className="px-2 py-2 text-xs text-muted">{idx + 1}</td>
-                              <td className="px-2 py-2 text-ink">{row.itemName}</td>
-                              <td className="px-2 py-2">
-                                <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
-                                  {row.homeFacility || '—'}
-                                </span>
-                              </td>
-                              <td className="px-2 py-2">
-                                <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
-                                  {row.topProcFacilities || '—'}
-                                </span>
-                              </td>
-                              <td className="px-2 py-2 font-medium text-ink">{row.total.toLocaleString()}</td>
-                              <td className="px-2 py-2 text-xs text-muted">{row.topDepts}</td>
+                    {entry.crossByHome.length > 0 ? (
+                      <div className="mt-4 overflow-auto">
+                        <table className="min-w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
+                              <th className="px-3 py-2 text-brand">Owned By</th>
+                              <th className="px-3 py-2">Items Processed Here</th>
+                              <th className="px-3 py-2">% of Cross-Facility</th>
+                              <th className="px-3 py-2">Requesting Departments</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </section>
-                ) : null}
-
-                {deptMixAnalytics.byFacility.map((facilityData) => (
-                  <section key={facilityData.facilityId} className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
-                    <div className="text-sm font-semibold text-ink">{facilityData.facilityName}</div>
-                    <div className="mt-2 grid gap-3 md:grid-cols-3">
-                      <article className="rounded-2xl border border-ink/10 p-3">
-                        <div className="text-xs uppercase tracking-[0.14em] text-muted">Total Items</div>
-                        <div className="mt-1 text-xl font-semibold text-ink">{facilityData.totalItems.toLocaleString()}</div>
-                      </article>
-                      <article className="rounded-2xl border border-ink/10 p-3">
-                        <div className="text-xs uppercase tracking-[0.14em] text-muted">Primary Dept</div>
-                        <div className="mt-1 text-xl font-semibold text-ink">{facilityData.primaryCount.toLocaleString()}</div>
-                        <div className="text-xs text-muted">{formatPercent(toPercent(facilityData.primaryCount, facilityData.totalItems))}</div>
-                      </article>
-                      <article className="rounded-2xl border border-ink/10 p-3">
-                        <div className="text-xs uppercase tracking-[0.14em] text-muted">Other Depts</div>
-                        <div className="mt-1 text-xl font-semibold text-ink">{facilityData.otherCount.toLocaleString()}</div>
-                        <div className="text-xs text-muted">{formatPercent(facilityData.otherRate)}</div>
-                      </article>
-                    </div>
-                    <p className="mt-4 text-xs text-muted">Primary depts (Main OR, Sterile Processing, Main SPD, DSC) shown in blue. Other depts in orange.</p>
-                    <div className="mt-3 h-96">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={facilityData.topDepts} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(100, 116, 139, 0.25)" />
-                          <XAxis type="number" allowDecimals={false} />
-                          <YAxis type="category" dataKey="deptName" width={200} tick={{ fontSize: 11 }} />
-                          <Tooltip formatter={(v: number | string | undefined) => [Number(v).toLocaleString(), 'Items']} />
-                          <Bar dataKey="count" name="Items">
-                            {facilityData.topDepts.map((entry, idx) => (
-                              <Cell
-                                key={`cell-${idx}`}
-                                fill={entry.isPrimary ? 'rgb(var(--brand-rgb))' : 'rgb(var(--accent-rgb))'}
-                              />
-                            ))}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                    {facilityData.topOtherItems.length > 0 ? (
-                      <div className="mt-6">
-                        <div className="text-sm font-semibold text-ink">Top Items from Other Departments</div>
-                        <div className="mt-3 overflow-auto">
-                          <table className="min-w-full text-sm">
-                            <thead>
-                              <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
-                                <th className="px-2 py-2">#</th>
-                                <th className="px-2 py-2">Item Name</th>
-                                <th className="px-2 py-2 text-brand">Home Facility</th>
-                                <th className="px-2 py-2">Cycles</th>
-                                <th className="px-2 py-2">Requesting Dept</th>
+                          </thead>
+                          <tbody>
+                            {entry.crossByHome.map((src) => (
+                              <tr key={src.homeFacility} className="border-t border-ink/10">
+                                <td className="px-3 py-2">
+                                  <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-semibold text-brand">
+                                    {src.homeFacility}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 font-semibold text-ink">{src.count.toLocaleString()}</td>
+                                <td className="px-3 py-2 text-muted">
+                                  {entry.crossTotal > 0 ? formatPercent(toPercent(src.count, entry.crossTotal)) : '—'}
+                                </td>
+                                <td className="px-3 py-2 text-xs text-muted">{src.topDepts}</td>
                               </tr>
-                            </thead>
-                            <tbody>
-                              {facilityData.topOtherItems.map((row, idx) => (
-                                <tr key={`fac-item-${idx}`} className="border-t border-ink/10">
-                                  <td className="px-2 py-2 text-xs text-muted">{idx + 1}</td>
-                                  <td className="px-2 py-2 text-ink">{row.itemName}</td>
-                                  <td className="px-2 py-2">
-                                    <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
-                                      {row.homeFacility || '—'}
-                                    </span>
-                                  </td>
-                                  <td className="px-2 py-2 font-medium text-ink">{row.total.toLocaleString()}</td>
-                                  <td className="px-2 py-2 text-xs text-muted">{row.topDepts}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
-                    ) : null}
+                    ) : (
+                      <p className="mt-3 text-sm text-muted">No cross-facility items in this date window.</p>
+                    )}
                   </section>
                 ))}
 
-                {deptMixAnalytics.byFacility.length === 0 ? (
+                {deptMixAnalytics.result.length === 0 ? (
                   <section className="rounded-3xl border border-ink/10 bg-white/85 p-8 text-center text-sm text-muted shadow-sm">
                     No data matches the current facility and date filters.
                   </section>
