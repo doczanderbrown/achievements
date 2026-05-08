@@ -394,6 +394,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
   const [trendLoading, setTrendLoading] = useState(false)
   const [trendError, setTrendError] = useState<string | null>(null)
   const [cohortMode, setCohortMode] = useState<CohortMode>('production')
+  const [facilityFilter, setFacilityFilter] = useState<string>('')
   const [separateUploads, setSeparateUploads] = useState<SeparateUploadFiles>({
     productivity: null,
     quality: null,
@@ -600,6 +601,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
   ) => {
     if (options.resetCohort !== false) {
       setCohortMode('production')
+      setFacilityFilter('')
     }
     setLoadedSource({
       sourceKey: options.sourceKey ?? `${Date.now()}-${options.persistenceFileName}`,
@@ -782,22 +784,19 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
   }
 
   const handleSeparateUploadBuild = async () => {
-    if (!separateUploads.productivity || !separateUploads.quality) {
-      setError('Productivity and Quality workbooks are required for the separate upload flow.')
+    if (!separateUploads.productivity) {
+      setError('Productivity workbook is required.')
       return
     }
 
-    const periodRange =
-      extractReportingPeriodRange(separateUploads.productivity.name).label
-        ? extractReportingPeriodRange(separateUploads.productivity.name)
-        : extractReportingPeriodRange(separateUploads.quality.name)
+    const periodRange = extractReportingPeriodRange(separateUploads.productivity.name)
 
     setError(null)
     setSeparateImportVariants(null)
     setFileName(
       [
         separateUploads.productivity.name,
-        separateUploads.quality.name,
+        separateUploads.quality?.name ?? null,
         separateUploads.timecards?.name ?? null,
       ]
         .filter(Boolean)
@@ -815,7 +814,9 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
 
     try {
       const productivityBuffer = await separateUploads.productivity.arrayBuffer()
-      const qualityBuffer = await separateUploads.quality.arrayBuffer()
+      const qualityBuffer = separateUploads.quality
+        ? await separateUploads.quality.arrayBuffer()
+        : null
       const timecardsBuffer = separateUploads.timecards
         ? await separateUploads.timecards.arrayBuffer()
         : null
@@ -833,7 +834,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
       const sourceName = [
         'Combined import',
         separateUploads.productivity.name,
-        separateUploads.quality.name,
+        separateUploads.quality?.name ?? null,
         separateUploads.timecards?.name ?? null,
       ]
         .filter(Boolean)
@@ -906,10 +907,22 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
     }
   }
 
+  const availableFacilities = useMemo(() => {
+    if (!report) return []
+    const seen = new Set<string>()
+    for (const user of report.users) {
+      if (user.facility) seen.add(user.facility)
+    }
+    return [...seen].sort()
+  }, [report])
+
   const filteredUsers = useMemo(() => {
     if (!report) return []
     const query = search.trim().toLowerCase()
     let users = [...report.users]
+    if (facilityFilter) {
+      users = users.filter((user) => user.facility === facilityFilter)
+    }
     if (query) {
       users = users.filter((user) => {
         return (
@@ -1241,9 +1254,8 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
 
       const qualitySignalRows = loadedSource.rows.filter((row) => {
         const incidents = Number(row.NumofEvents ?? 0)
-        const auditChecks = Number(row['Audit Check Count'] ?? 0)
         const coaching = Number(row['Coaching Count'] ?? 0)
-        return incidents > 0 || auditChecks > 0 || coaching > 0
+        return incidents > 0 || coaching > 0
       })
       const qualityNoSignalRows = loadedSource.rows.filter((row) => !qualitySignalRows.includes(row))
       const qualityDiagnostics = loadedSource.diagnostics?.quality ?? null
@@ -1260,14 +1272,13 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
               : 'default',
         bullets: qualityDiagnostics
           ? [
-              `Accountable event assignments matched: ${qualityDiagnostics.matchedIncidentAssignments}.`,
-              `Audit checks matched: ${qualityDiagnostics.matchedAuditChecks}; audit fails: ${qualityDiagnostics.matchedAuditFails}.`,
+              `Event assignments matched: ${qualityDiagnostics.matchedIncidentAssignments}.`,
               `Coaching rows matched: ${qualityDiagnostics.matchedCoachingRows}.`,
               qualityDiagnostics.aliasMatches > 0
                 ? `Manual quality aliases resolved: ${qualityDiagnostics.aliasMatches}.`
                 : null,
             ].filter(Boolean) as string[]
-          : ['Quality coverage is inferred from the loaded workbook rows.'],
+          : ['No quality workbook uploaded — defect rates are 0 for all users.'],
         groups: [
           {
             label: `Users with quality signals (${qualitySignalRows.length})`,
@@ -2089,7 +2100,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                     </span>
                   </label>
                   <label className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-ink">3. Quality</span>
+                    <span className="text-sm font-medium text-ink">3. Quality <span className="text-muted font-normal">(optional)</span></span>
                     <input
                       type="file"
                       accept=".xlsx"
@@ -2121,7 +2132,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                   <button
                     type="button"
                     onClick={() => void handleSeparateUploadBuild()}
-                    disabled={!separateUploads.productivity || !separateUploads.quality}
+                    disabled={!separateUploads.productivity}
                     className="rounded-full border border-brand/40 bg-ink px-4 py-2 text-sm font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Build report from separate uploads
@@ -2299,6 +2310,18 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
               >
                 <option value="production">Cohort: Production roles only</option>
                 <option value="all">Cohort: All roles</option>
+              </select>
+            ) : null}
+            {availableFacilities.length > 1 ? (
+              <select
+                value={facilityFilter}
+                onChange={(event) => setFacilityFilter(event.target.value)}
+                className="rounded-full border border-brand/20 bg-white/90 px-4 py-2 text-sm"
+              >
+                <option value="">All facilities</option>
+                {availableFacilities.map((f) => (
+                  <option key={f} value={f}>{f}</option>
+                ))}
               </select>
             ) : null}
             {viewMode === 'cards' ? (

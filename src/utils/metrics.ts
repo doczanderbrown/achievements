@@ -151,9 +151,8 @@ export type RawRow = {
   'Deliver Scans': number
   'Activity Count': number
   'Activity Time (Mins)': number
+  'Primary Facility'?: string
   Role?: string
-  'Audit Check Count'?: number
-  'Audit Fail Count'?: number
   'Coaching Count'?: number
   'PTO Hours'?: number
   'Unpaid Hours'?: number
@@ -196,12 +195,11 @@ export type UserRecord = {
   name: string
   techLabel: string
   role: string
+  facility: string
   hoursWorked: number
   productivityRanked: boolean
   qualityContext: {
     eventCount: number
-    auditChecks: number
-    auditFails: number
     coachingCount: number
   }
   timekeepingContext: {
@@ -530,9 +528,8 @@ export const coerceRow = (row: Record<string, unknown>): RawRow => {
     'Deliver Scans': toNumber(row['Deliver Scans']),
     'Activity Count': toNumber(row['Activity Count']),
     'Activity Time (Mins)': toNumber(row['Activity Time (Mins)']),
+    'Primary Facility': String(row['Primary Facility'] ?? '').trim(),
     Role: String(row.Role ?? '').trim(),
-    'Audit Check Count': toNumber(row['Audit Check Count']),
-    'Audit Fail Count': toNumber(row['Audit Fail Count']),
     'Coaching Count': toNumber(row['Coaching Count']),
     'PTO Hours': toNumber(row['PTO Hours']),
     'Unpaid Hours': toNumber(row['Unpaid Hours']),
@@ -619,11 +616,10 @@ export const buildReport = (
       name,
       techLabel: getTechLabel(row),
       role,
+      facility: String(row['Primary Facility'] ?? '').trim(),
       hoursWorked,
       qualityContext: {
         eventCount: toNumber(row['NumofEvents']),
-        auditChecks: toNumber(row['Audit Check Count']),
-        auditFails: toNumber(row['Audit Fail Count']),
         coachingCount: toNumber(row['Coaching Count']),
       },
       timekeepingContext: {

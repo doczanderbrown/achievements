@@ -4,7 +4,7 @@ import type { RawRow } from './metrics'
 
 type SeparateSpdImportArgs = {
   productivityBuffer: ArrayBuffer
-  qualityBuffer: ArrayBuffer
+  qualityBuffer?: ArrayBuffer | null
   timecardsBuffer?: ArrayBuffer | null
   timecardsFileName?: string | null
   periodStart?: string | null
@@ -25,12 +25,10 @@ export type SeparateSpdImportDiagnostics = {
   quality: {
     usersWithSignals: number
     matchedIncidentAssignments: number
-    matchedAuditChecks: number
-    matchedAuditFails: number
     matchedCoachingRows: number
     aliasMatches: number
     unmatchedNames: string[]
-  }
+  } | null
   timekeeping: {
     provided: boolean
     applied: boolean
@@ -83,7 +81,6 @@ const PRODUCTIVITY_REQUIRED_COLUMNS = [
 ] as const
 
 const QUALITY_EVENT_SHEET_NAMES = ['OR Events', 'Post Procedure Events', 'SPD Events'] as const
-const QUALITY_AUDIT_SHEET_NAME = 'Audits'
 const QUALITY_COACHING_SHEET_NAME = 'Coaching Events'
 const TIMEKEEPING_REQUIRED_COLUMNS = ['Employee Name'] as const
 const TIMEKEEPING_WORKED_HOUR_COLUMNS = [
@@ -114,6 +111,7 @@ const MANUAL_NAME_ALIASES: Record<string, string> = {
 type ProductivitySeed = {
   userId: string
   userName: string
+  primaryFacility: string
   row: Record<string, unknown>
 }
 
@@ -139,16 +137,12 @@ type BucketCountMap = Record<QualityBucket, number>
 
 type QualityUserStats = {
   incidents: BucketCountMap
-  auditChecks: BucketCountMap
-  auditFails: BucketCountMap
   coachingCount: number
 }
 
 type QualityImportResult = {
   statsByUserId: Map<string, QualityUserStats>
   matchedIncidentAssignments: number
-  matchedAuditChecks: number
-  matchedAuditFails: number
   matchedCoachingRows: number
   aliasMatches: number
   unmatchedNames: Set<string>
@@ -337,6 +331,7 @@ const buildProductivitySeeds = (rows: Record<string, unknown>[]) => {
     .map((row) => ({
       userId: String(row['User ID'] ?? '').trim(),
       userName: normalizeWhitespace(String(row['User Name'] ?? '')),
+      primaryFacility: normalizeWhitespace(String(row['Primary Facility'] ?? '')),
       row,
     }))
     .filter((row) => row.userId && row.userName)
@@ -428,8 +423,6 @@ const getOrCreateQualityStats = (
 
   const created: QualityUserStats = {
     incidents: createZeroBucketMap(),
-    auditChecks: createZeroBucketMap(),
-    auditFails: createZeroBucketMap(),
     coachingCount: 0,
   }
   statsByUserId.set(userId, created)
@@ -896,18 +889,15 @@ const buildQualityStats = (
   periodEnd?: string | null,
 ): QualityImportResult => {
   const hasSupportedSheets =
-    QUALITY_EVENT_SHEET_NAMES.some((sheetName) => workbook.SheetNames.includes(sheetName)) ||
-    workbook.SheetNames.includes(QUALITY_AUDIT_SHEET_NAME)
+    QUALITY_EVENT_SHEET_NAMES.some((sheetName) => workbook.SheetNames.includes(sheetName))
 
   if (!hasSupportedSheets) {
-    throw new Error('Quality workbook does not contain the expected event or audit sheets.')
+    throw new Error('Quality workbook does not contain the expected event sheets (OR Events, Post Procedure Events, or SPD Events).')
   }
 
   const statsByUserId = new Map<string, QualityUserStats>()
   const unmatchedNames = new Set<string>()
   let matchedIncidentAssignments = 0
-  let matchedAuditChecks = 0
-  let matchedAuditFails = 0
   let matchedCoachingRows = 0
   let aliasMatches = 0
 
@@ -943,43 +933,6 @@ const buildQualityStats = (
     }
   }
 
-  if (workbook.SheetNames.includes(QUALITY_AUDIT_SHEET_NAME)) {
-    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(
-      workbook.Sheets[QUALITY_AUDIT_SHEET_NAME],
-      { defval: '' },
-    )
-
-    for (const row of rows) {
-      if (!isWithinPeriod(row.Audited, periodStart, periodEnd)) continue
-      const status = normalizeWhitespace(String(row.Status ?? '')).toLowerCase()
-      const isFail = status === 'fail' || status === 'failed'
-      const matchedInRow = new Set<string>()
-
-      for (const entry of parseAccountableEntries(row.Accountable)) {
-        const bucket = mapResponsibilityToBucket(entry.roleLabel)
-        if (!bucket) continue
-        const match = matchUserByName(byNameKey, entry.name)
-        if (!match) {
-          unmatchedNames.add(entry.name)
-          continue
-        }
-        if (match.via === 'alias') aliasMatches += 1
-
-        const dedupeKey = `${match.userId}:${bucket}`
-        if (matchedInRow.has(dedupeKey)) continue
-        matchedInRow.add(dedupeKey)
-
-        const stats = getOrCreateQualityStats(statsByUserId, match.userId)
-        stats.auditChecks[bucket] += 1
-        matchedAuditChecks += 1
-        if (isFail) {
-          stats.auditFails[bucket] += 1
-          matchedAuditFails += 1
-        }
-      }
-    }
-  }
-
   if (workbook.SheetNames.includes(QUALITY_COACHING_SHEET_NAME)) {
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(
       workbook.Sheets[QUALITY_COACHING_SHEET_NAME],
@@ -1007,8 +960,6 @@ const buildQualityStats = (
   return {
     statsByUserId,
     matchedIncidentAssignments,
-    matchedAuditChecks,
-    matchedAuditFails,
     matchedCoachingRows,
     aliasMatches,
     unmatchedNames,
@@ -1115,32 +1066,28 @@ export const buildRowsFromSeparateSpdUploads = ({
       ? productivityScaledDays / productivitySourceDays
       : null
 
-  const qualityWorkbook = readWorkbook(qualityBuffer)
-  const quality = buildQualityStats(
-    qualityWorkbook,
-    byNameKey,
-    effectivePeriodRange.startIso ?? periodStart,
-    effectivePeriodRange.endIso ?? periodEnd,
-  )
+  const quality = qualityBuffer && qualityBuffer.byteLength > 0
+    ? buildQualityStats(
+        readWorkbook(qualityBuffer),
+        byNameKey,
+        effectivePeriodRange.startIso ?? periodStart,
+        effectivePeriodRange.endIso ?? periodEnd,
+      )
+    : null
 
-  const rows: RawRow[] = seeds.map(({ userId, userName, row }) => {
+  const rows: RawRow[] = seeds.map(({ userId, userName, primaryFacility, row }) => {
     const effectiveRow =
       productivityScaleFactor !== null ? scaleProductivityRow(row, productivityScaleFactor) : row
-    const qualityStats = quality.statsByUserId.get(userId)
+    const qualityStats = quality?.statsByUserId.get(userId)
     const timekeepingContext = timekeeping?.contextByUserId.get(userId)
-    const auditFailCount = qualityStats
-      ? Object.values(qualityStats.auditFails).reduce((sum, value) => sum + value, 0)
-      : 0
-    const auditCheckCount = qualityStats
-      ? Object.values(qualityStats.auditChecks).reduce((sum, value) => sum + value, 0)
-      : 0
     const incidentCount = qualityStats
-      ? Object.values(qualityStats.incidents).reduce((sum, value) => sum + value, 0)
+      ? Object.values(qualityStats.incidents).reduce((sum: number, value: number) => sum + value, 0)
       : 0
 
     return {
       'User ID': userId,
       'User Name': userName,
+      'Primary Facility': primaryFacility,
       'Hours Worked': timekeeping?.hoursByUserId.get(userId) ?? 0,
       NumofEvents: incidentCount,
       'Defect Rate': calculateDefectRate(effectiveRow, qualityStats),
@@ -1157,8 +1104,6 @@ export const buildRowsFromSeparateSpdUploads = ({
       'Activity Count': toNumber(effectiveRow['Activity Count']),
       'Activity Time (Mins)': toNumber(effectiveRow['Activity Time (Mins)']),
       Role: normalizeWhitespace(String(effectiveRow.Role ?? '')),
-      'Audit Check Count': auditCheckCount,
-      'Audit Fail Count': auditFailCount,
       'Coaching Count': qualityStats?.coachingCount ?? 0,
       'PTO Hours': timekeepingContext?.ptoHours ?? 0,
       'Unpaid Hours': timekeepingContext?.unpaidHours ?? 0,
@@ -1168,15 +1113,14 @@ export const buildRowsFromSeparateSpdUploads = ({
   })
 
   const qualitySignalUsers = rows.filter(
-    (row) =>
-      row.NumofEvents > 0 ||
-      toNumber(row['Audit Check Count']) > 0 ||
-      toNumber(row['Coaching Count']) > 0,
+    (row) => row.NumofEvents > 0 || toNumber(row['Coaching Count']) > 0,
   ).length
 
   const notes = [
     `Combined ${rows.length} productivity rows with quality signals for ${qualitySignalUsers} users.`,
-    `Quality attribution used ${quality.matchedIncidentAssignments} accountable event assignments, ${quality.matchedAuditChecks} audit checks, and ${quality.matchedCoachingRows} coaching records.`,
+    quality
+      ? `Quality attribution used ${quality.matchedIncidentAssignments} event assignments and ${quality.matchedCoachingRows} coaching records.`
+      : 'No quality workbook uploaded — defect rates will be 0 for all users.',
   ]
 
   const analysisModeNote =
@@ -1201,14 +1145,15 @@ export const buildRowsFromSeparateSpdUploads = ({
     )
   }
 
-  if (quality.aliasMatches > 0) {
-    notes.push(`Resolved ${quality.aliasMatches} manual name aliases while mapping the quality workbook.`)
-  }
-
-  if (quality.unmatchedNames.size > 0) {
-    notes.push(`Skipped ${quality.unmatchedNames.size} unmatched names from the quality workbook.`)
-    const reviewNote = formatSampleReviewNote('quality', quality.unmatchedNames)
-    if (reviewNote) notes.push(reviewNote)
+  if (quality) {
+    if (quality.aliasMatches > 0) {
+      notes.push(`Resolved ${quality.aliasMatches} manual name aliases while mapping the quality workbook.`)
+    }
+    if (quality.unmatchedNames.size > 0) {
+      notes.push(`Skipped ${quality.unmatchedNames.size} unmatched names from the quality workbook.`)
+      const reviewNote = formatSampleReviewNote('quality', quality.unmatchedNames)
+      if (reviewNote) notes.push(reviewNote)
+    }
   }
 
   if (timekeeping) {
@@ -1248,15 +1193,15 @@ export const buildRowsFromSeparateSpdUploads = ({
   }
 
   const diagnostics: SeparateSpdImportDiagnostics = {
-    quality: {
-      usersWithSignals: qualitySignalUsers,
-      matchedIncidentAssignments: quality.matchedIncidentAssignments,
-      matchedAuditChecks: quality.matchedAuditChecks,
-      matchedAuditFails: quality.matchedAuditFails,
-      matchedCoachingRows: quality.matchedCoachingRows,
-      aliasMatches: quality.aliasMatches,
-      unmatchedNames: [...quality.unmatchedNames].sort((a, b) => a.localeCompare(b)),
-    },
+    quality: quality
+      ? {
+          usersWithSignals: qualitySignalUsers,
+          matchedIncidentAssignments: quality.matchedIncidentAssignments,
+          matchedCoachingRows: quality.matchedCoachingRows,
+          aliasMatches: quality.aliasMatches,
+          unmatchedNames: [...quality.unmatchedNames].sort((a, b) => a.localeCompare(b)),
+        }
+      : null,
     timekeeping: timekeeping
       ? {
           provided: true,

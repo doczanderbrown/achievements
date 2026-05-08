@@ -287,14 +287,6 @@ const ReportCard = ({
       value: user.qualityContext.eventCount,
     },
     {
-      key: 'audits',
-      label: 'Audit fails / checks',
-      value:
-        user.qualityContext.auditChecks > 0
-          ? `${user.qualityContext.auditFails}/${user.qualityContext.auditChecks}`
-          : null,
-    },
-    {
       key: 'coaching',
       label: 'Coaching',
       value: user.qualityContext.coachingCount,
