@@ -690,5 +690,6 @@ export const parseProcessingLocationWorkbook = async (
     caseRouting: null,
     facilityOptions: [],
     isEndeavorFormat: false,
+    itemHomeFacilities: [],
   }
 }

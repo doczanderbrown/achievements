@@ -73,4 +73,5 @@ export type ProcessingLocationDataset = {
   caseRouting: CaseRoutingDataset | null
   facilityOptions: FilterOption[]
   isEndeavorFormat: boolean
+  itemHomeFacilities: string[]
 }

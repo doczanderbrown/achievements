@@ -605,11 +605,15 @@ export const parseEndeavorWorkbook = async (
 
   // Map invName token ID → home facilities
   const setNameToHomes = new Map<number, Set<string>>()
+  const itemHomeFacilities: string[] = new Array(invNameTokens.length).fill('')
   for (let tokenId = 0; tokenId < invNameTokens.length; tokenId += 1) {
     const fullName = normalizeLabel(decodeTokenLabel(invNameTokens[tokenId], sharedLookup), '')
     const baseName = stripItemSuffix(fullName).toLowerCase()
     const homes = itemHomeMap.get(baseName)
-    if (homes) setNameToHomes.set(tokenId, homes)
+    if (homes) {
+      setNameToHomes.set(tokenId, homes)
+      itemHomeFacilities[tokenId] = [...homes][0] ?? ''
+    }
   }
 
   const finalOwnerIds = new Uint32Array(n)
@@ -669,5 +673,6 @@ export const parseEndeavorWorkbook = async (
     caseRouting: null,
     facilityOptions,
     isEndeavorFormat: true,
+    itemHomeFacilities,
   }
 }

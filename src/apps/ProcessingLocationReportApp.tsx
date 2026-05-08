@@ -22,7 +22,7 @@ type ProcessingLocationReportAppProps = {
   onBack?: () => void
 }
 
-type DashboardTab = 'mix' | 'no-go' | 'case-routing' | 'dept-mix'
+type DashboardTab = 'mix' | 'no-go' | 'case-routing' | 'dept-mix' | 'cross-site'
 type DrilldownChart = 'mix' | 'no-go' | 'go'
 type DrilldownSegment = 'onsite' | 'offsite'
 type DrilldownSelection = {
@@ -781,6 +781,61 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
     return { byFacility, totalItems, totalOtherItems, overallOtherRate: toPercent(totalOtherItems, totalItems), overallTopOtherItems }
   }, [dataset, dateRangeSerials, selectedFacilities])
 
+  const crossSiteAnalytics = useMemo(() => {
+    if (!dataset?.isEndeavorFormat || !dateRangeSerials) return null
+
+    const facilitySet = selectedFacilities.length > 0 ? new Set(selectedFacilities) : null
+
+    type CrossSiteRow = {
+      dateSerial: number
+      date: string
+      itemName: string
+      homeFacility: string
+      sterilizedAt: string
+      dept: string
+      specialty: string
+      method: string
+    }
+
+    const rows: CrossSiteRow[] = []
+    const pairCounts = new Map<string, number>()
+
+    for (let i = 0; i < dataset.rows.dateSerials.length; i += 1) {
+      if (dataset.rows.offsiteFlags[i] !== 1) continue
+
+      const dateSerial = dataset.rows.dateSerials[i]
+      if (dateSerial < dateRangeSerials.startSerial || dateSerial > dateRangeSerials.endSerial) continue
+
+      const facilityId = dataset.rows.facilityIds[i]
+      if (facilitySet && !facilitySet.has(facilityId)) continue
+
+      const setNameId = dataset.rows.setNameIds[i]
+      const ownerId = dataset.rows.ownerIds[i]
+      const specialtyId = dataset.rows.specialtyIds[i]
+      const itemTypeId = dataset.rows.itemTypeIds[i]
+
+      const itemName = dataset.setNames[setNameId] ?? 'Unknown'
+      const sterilizedAt = dataset.facilities[facilityId] ?? 'Unknown'
+      const homeFacility = dataset.itemHomeFacilities[setNameId] ?? ''
+      const dept = ownerLabelById.get(ownerId) ?? 'Unspecified'
+      const specialty = specialtyLabelById.get(specialtyId) ?? 'Unspecified'
+      const method = itemTypeLabelById.get(itemTypeId) ?? 'Unspecified'
+
+      rows.push({ dateSerial, date: formatDate(dateSerial), itemName, homeFacility, sterilizedAt, dept, specialty, method })
+
+      const pair = `${homeFacility} → ${sterilizedAt}`
+      pairCounts.set(pair, (pairCounts.get(pair) ?? 0) + 1)
+    }
+
+    rows.sort((a, b) => b.dateSerial - a.dateSerial)
+
+    const topPairs = Array.from(pairCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([pair, count]) => ({ pair, count }))
+
+    return { rows, topPairs, total: rows.length }
+  }, [dataset, dateRangeSerials, selectedFacilities, ownerLabelById, specialtyLabelById, itemTypeLabelById])
+
   const caseRoutingAnalytics = useMemo(() => {
     if (!dataset?.caseRouting || !dateRangeSerials) return null
 
@@ -1175,6 +1230,24 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
     itemTypeLabelById,
   ])
 
+  const exportCrossSiteExcel = () => {
+    if (!crossSiteAnalytics) return
+    const sheetRows = crossSiteAnalytics.rows.map((r) => ({
+      Date: r.date,
+      Name: r.itemName,
+      ItemHomeFacility: r.homeFacility,
+      SterilizedFacility: r.sterilizedAt,
+      Department: r.dept,
+      Specialty: r.specialty,
+      Method: r.method,
+    }))
+    const worksheet = XLSX.utils.json_to_sheet(sheetRows)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Cross-Site')
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    XLSX.writeFile(workbook, `cross-site-report-${stamp}.xlsx`)
+  }
+
   const exportBucketExcel = () => {
     if (!dataset || !drilldown || !drilldownResult) return
     const rows = drilldownResult.rowIndices.map((rowIndex) => {
@@ -1433,19 +1506,30 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                 Case Routing
               </button>
               {dataset.isEndeavorFormat ? (
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('dept-mix')}
-                  className={`rounded-full border px-4 py-2 text-sm font-medium ${
-                    activeTab === 'dept-mix' ? 'border-ink bg-ink text-white' : 'border-ink/20 bg-white text-ink'
-                  }`}
-                >
-                  Dept. Mix
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('dept-mix')}
+                    className={`rounded-full border px-4 py-2 text-sm font-medium ${
+                      activeTab === 'dept-mix' ? 'border-ink bg-ink text-white' : 'border-ink/20 bg-white text-ink'
+                    }`}
+                  >
+                    Dept. Mix
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('cross-site')}
+                    className={`rounded-full border px-4 py-2 text-sm font-medium ${
+                      activeTab === 'cross-site' ? 'border-ink bg-ink text-white' : 'border-ink/20 bg-white text-ink'
+                    }`}
+                  >
+                    Cross-Site Report
+                  </button>
+                </>
               ) : null}
             </section>
 
-            {activeTab !== 'case-routing' && activeTab !== 'dept-mix' ? (
+            {activeTab !== 'case-routing' && activeTab !== 'dept-mix' && activeTab !== 'cross-site' ? (
               <section className={`grid gap-4 md:grid-cols-2 ${dataset.facilityOptions.length > 0 ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`}>
                 {dataset.facilityOptions.length > 0 ? (
                   <FilterChecklist
@@ -1594,7 +1678,7 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
               </section>
             ) : null}
 
-            {analytics && analytics.totalRows === 0 && activeTab !== 'case-routing' && activeTab !== 'dept-mix' ? (
+            {analytics && analytics.totalRows === 0 && activeTab !== 'case-routing' && activeTab !== 'dept-mix' && activeTab !== 'cross-site' ? (
               <section className="rounded-3xl border border-ink/10 bg-white/85 p-8 text-center text-sm text-muted shadow-sm">
                 No rows match the current filter selection in the current date window.
               </section>
@@ -2110,6 +2194,112 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                   </section>
                 ) : null}
               </>
+            ) : null}
+
+            {activeTab === 'cross-site' && crossSiteAnalytics ? (
+              <>
+                <section className="grid gap-4 md:grid-cols-3">
+                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Cross-Site Items</div>
+                    <div className="mt-2 text-2xl font-semibold text-ink">{crossSiteAnalytics.total.toLocaleString()}</div>
+                    <div className="mt-1 text-sm text-muted">In selected date window</div>
+                  </article>
+                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Unique Items</div>
+                    <div className="mt-2 text-2xl font-semibold text-ink">
+                      {new Set(crossSiteAnalytics.rows.map((r) => r.itemName)).size.toLocaleString()}
+                    </div>
+                  </article>
+                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Facility Pairs</div>
+                    <div className="mt-2 text-2xl font-semibold text-ink">{crossSiteAnalytics.topPairs.length}</div>
+                    <div className="mt-1 text-sm text-muted">Distinct home → processed-at combos</div>
+                  </article>
+                </section>
+
+                {crossSiteAnalytics.topPairs.length > 0 ? (
+                  <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
+                    <div className="text-sm font-semibold text-ink">Volume by Facility Pair</div>
+                    <p className="mt-1 text-sm text-muted">Home location → where it was actually sterilized.</p>
+                    <div className="mt-4" style={{ height: `${Math.max(200, crossSiteAnalytics.topPairs.length * 44)}px` }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={crossSiteAnalytics.topPairs} layout="vertical" margin={{ left: 8, right: 40, top: 4, bottom: 4 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(100,116,139,0.25)" />
+                          <XAxis type="number" allowDecimals={false} />
+                          <YAxis type="category" dataKey="pair" width={280} tick={{ fontSize: 11 }} />
+                          <Tooltip formatter={(v: number | string | undefined) => [Number(v).toLocaleString(), 'Items']} />
+                          <Bar dataKey="count" fill="rgb(var(--accent-rgb))" name="Items" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </section>
+                ) : null}
+
+                <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-ink">Cross-Site Item Detail</div>
+                      <p className="mt-1 text-sm text-muted">
+                        Items sterilized at a facility other than their registered home location. Sorted by most recent first.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={exportCrossSiteExcel}
+                      className="rounded-full border border-accent/30 bg-accent px-4 py-2 text-sm font-medium text-white"
+                    >
+                      Export Excel
+                    </button>
+                  </div>
+                  <div className="mt-4 overflow-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
+                          <th className="px-2 py-2">Date</th>
+                          <th className="px-2 py-2">Item Name</th>
+                          <th className="px-2 py-2 text-brand">Home Facility</th>
+                          <th className="px-2 py-2 text-accent">Sterilized At</th>
+                          <th className="px-2 py-2">Department</th>
+                          <th className="px-2 py-2">Specialty</th>
+                          <th className="px-2 py-2">Method</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {crossSiteAnalytics.rows.slice(0, 500).map((row, idx) => (
+                          <tr key={`cs-${idx}`} className="border-t border-ink/10">
+                            <td className="px-2 py-2 text-muted">{row.date}</td>
+                            <td className="px-2 py-2 text-ink">{row.itemName}</td>
+                            <td className="px-2 py-2">
+                              <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
+                                {row.homeFacility || '—'}
+                              </span>
+                            </td>
+                            <td className="px-2 py-2">
+                              <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
+                                {row.sterilizedAt}
+                              </span>
+                            </td>
+                            <td className="px-2 py-2 text-muted">{row.dept}</td>
+                            <td className="px-2 py-2 text-muted">{row.specialty}</td>
+                            <td className="px-2 py-2 text-muted">{row.method}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {crossSiteAnalytics.total > 500 ? (
+                      <div className="mt-3 text-center text-xs text-muted">
+                        Showing first 500 of {crossSiteAnalytics.total.toLocaleString()} rows — use Export Excel for the full list.
+                      </div>
+                    ) : null}
+                  </div>
+                </section>
+              </>
+            ) : null}
+
+            {activeTab === 'cross-site' && (!crossSiteAnalytics || crossSiteAnalytics.total === 0) ? (
+              <section className="rounded-3xl border border-ink/10 bg-white/85 p-8 text-center text-sm text-muted shadow-sm">
+                No cross-site items found for the current facility and date filters.
+              </section>
             ) : null}
 
             {analytics && analytics.totalRows > 0 && activeTab === 'no-go' ? (
