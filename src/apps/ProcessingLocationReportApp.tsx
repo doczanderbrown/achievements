@@ -849,7 +849,25 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       .sort((a, b) => b[1] - a[1])
       .map(([pair, count]) => ({ pair, count }))
 
-    return { rows, topPairs, total: rows.length }
+    // Group by processing facility: which home facilities' items did each site process?
+    const procFacilityMap = new Map<string, Map<string, number>>()
+    for (const row of rows) {
+      if (!row.homeFacility) continue
+      const sourceMap = procFacilityMap.get(row.sterilizedAt) ?? new Map<string, number>()
+      sourceMap.set(row.homeFacility, (sourceMap.get(row.homeFacility) ?? 0) + 1)
+      procFacilityMap.set(row.sterilizedAt, sourceMap)
+    }
+    const byProcFacility = Array.from(procFacilityMap.entries())
+      .map(([procFacility, sourceMap]) => ({
+        procFacility,
+        sources: Array.from(sourceMap.entries())
+          .map(([homeFacility, count]) => ({ homeFacility, count }))
+          .sort((a, b) => b.count - a.count),
+        total: Array.from(sourceMap.values()).reduce((a, b) => a + b, 0),
+      }))
+      .sort((a, b) => b.total - a.total)
+
+    return { rows, topPairs, total: rows.length, byProcFacility }
   }, [dataset, dateRangeSerials, selectedFacilities, ownerLabelById, specialtyLabelById, itemTypeLabelById])
 
   const caseRoutingAnalytics = useMemo(() => {
@@ -2232,39 +2250,45 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
 
             {activeTab === 'cross-site' && crossSiteAnalytics ? (
               <>
-                <section className="grid gap-4 md:grid-cols-3">
-                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
-                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Cross-Site Items</div>
-                    <div className="mt-2 text-2xl font-semibold text-ink">{crossSiteAnalytics.total.toLocaleString()}</div>
-                    <div className="mt-1 text-sm text-muted">In selected date window</div>
-                  </article>
-                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
-                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Unique Items</div>
-                    <div className="mt-2 text-2xl font-semibold text-ink">
-                      {new Set(crossSiteAnalytics.rows.map((r) => r.itemName)).size.toLocaleString()}
-                    </div>
-                  </article>
-                  <article className="rounded-3xl border border-ink/10 bg-white/90 p-4 shadow-sm">
-                    <div className="text-xs uppercase tracking-[0.16em] text-muted">Facility Pairs</div>
-                    <div className="mt-2 text-2xl font-semibold text-ink">{crossSiteAnalytics.topPairs.length}</div>
-                    <div className="mt-1 text-sm text-muted">Distinct home → processed-at combos</div>
-                  </article>
-                </section>
-
-                {crossSiteAnalytics.topPairs.length > 0 ? (
+                {crossSiteAnalytics.byProcFacility.length > 0 ? (
                   <section className="rounded-3xl border border-ink/10 bg-white/90 p-6 shadow-sm">
-                    <div className="text-sm font-semibold text-ink">Volume by Facility Pair</div>
-                    <p className="mt-1 text-sm text-muted">Home location → where it was actually sterilized.</p>
-                    <div className="mt-4" style={{ height: `${Math.max(200, crossSiteAnalytics.topPairs.length * 44)}px` }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={crossSiteAnalytics.topPairs} layout="vertical" margin={{ left: 8, right: 40, top: 4, bottom: 4 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(100,116,139,0.25)" />
-                          <XAxis type="number" allowDecimals={false} />
-                          <YAxis type="category" dataKey="pair" width={280} tick={{ fontSize: 11 }} />
-                          <Tooltip formatter={(v: number | string | undefined) => [Number(v).toLocaleString(), 'Items']} />
-                          <Bar dataKey="count" fill="rgb(var(--accent-rgb))" name="Items" />
-                        </BarChart>
-                      </ResponsiveContainer>
+                    <div className="text-sm font-semibold text-ink">Which facility processed whose items?</div>
+                    <p className="mt-1 text-sm text-muted">
+                      Each processing facility and the items it sterilized that belong to other facilities.
+                    </p>
+                    <div className="mt-4 space-y-6">
+                      {crossSiteAnalytics.byProcFacility.map((procEntry) => (
+                        <div key={procEntry.procFacility}>
+                          <div className="flex items-center gap-2">
+                            <span className="rounded-full bg-accent/10 px-3 py-1 text-sm font-semibold text-accent">
+                              {procEntry.procFacility}
+                            </span>
+                            <span className="text-sm text-muted">processed {procEntry.total.toLocaleString()} items owned by other facilities</span>
+                          </div>
+                          <div className="mt-2 overflow-auto">
+                            <table className="min-w-full text-sm">
+                              <thead>
+                                <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
+                                  <th className="px-3 py-1">Owned By</th>
+                                  <th className="px-3 py-1">Items Processed Here</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {procEntry.sources.map((src) => (
+                                  <tr key={src.homeFacility} className="border-t border-ink/10">
+                                    <td className="px-3 py-2">
+                                      <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
+                                        {src.homeFacility}
+                                      </span>
+                                    </td>
+                                    <td className="px-3 py-2 font-semibold text-ink">{src.count.toLocaleString()}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </section>
                 ) : null}
