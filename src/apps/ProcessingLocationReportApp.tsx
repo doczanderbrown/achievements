@@ -694,11 +694,11 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
     const facilitySet = selectedFacilities.length > 0 ? new Set(selectedFacilities) : null
     const ownerLabels = new Map(dataset.owners.map((o) => [o.id, o.label]))
 
+    type OtherItemEntry = { total: number; depts: Map<number, number>; procFacilities: Map<number, number> }
+
     const facilityCounts = new Map<number, Map<number, number>>()
-    // setNameId → { total, depts: Map<ownerId, count> }
-    const overallOtherItemMap = new Map<number, { total: number; depts: Map<number, number> }>()
-    // facilityId → setNameId → { total, depts }
-    const facilityOtherItemMap = new Map<number, Map<number, { total: number; depts: Map<number, number> }>>()
+    const overallOtherItemMap = new Map<number, OtherItemEntry>()
+    const facilityOtherItemMap = new Map<number, Map<number, OtherItemEntry>>()
 
     for (let i = 0; i < dataset.rows.dateSerials.length; i += 1) {
       const dateSerial = dataset.rows.dateSerials[i]
@@ -715,14 +715,15 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       if (!isPrimaryDept(deptName)) {
         const setNameId = dataset.rows.setNameIds[i]
 
-        const existing = overallOtherItemMap.get(setNameId) ?? { total: 0, depts: new Map() }
+        const existing = overallOtherItemMap.get(setNameId) ?? { total: 0, depts: new Map(), procFacilities: new Map() }
         existing.total += 1
         existing.depts.set(ownerId, (existing.depts.get(ownerId) ?? 0) + 1)
+        existing.procFacilities.set(facilityId, (existing.procFacilities.get(facilityId) ?? 0) + 1)
         overallOtherItemMap.set(setNameId, existing)
 
         let facItemMap = facilityOtherItemMap.get(facilityId)
         if (!facItemMap) { facItemMap = new Map(); facilityOtherItemMap.set(facilityId, facItemMap) }
-        const facExisting = facItemMap.get(setNameId) ?? { total: 0, depts: new Map() }
+        const facExisting = facItemMap.get(setNameId) ?? { total: 0, depts: new Map(), procFacilities: new Map() }
         facExisting.total += 1
         facExisting.depts.set(ownerId, (facExisting.depts.get(ownerId) ?? 0) + 1)
         facItemMap.set(setNameId, facExisting)
@@ -730,19 +731,34 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
     }
 
     const buildTopItems = (
-      itemMap: Map<number, { total: number; depts: Map<number, number> }>,
+      itemMap: Map<number, OtherItemEntry>,
       limit: number,
+      showProcFacility: boolean,
     ) =>
       Array.from(itemMap.entries())
         .sort((a, b) => b[1].total - a[1].total)
         .slice(0, limit)
-        .map(([setNameId, { total, depts }]) => {
+        .map(([setNameId, { total, depts, procFacilities }]) => {
           const topDepts = Array.from(depts.entries())
             .sort((a, b) => b[1] - a[1])
             .slice(0, 3)
             .map(([ownerId, count]) => `${ownerLabels.get(ownerId) ?? 'Unknown'} (${count})`)
             .join(', ')
-          return { itemName: dataset.setNames[setNameId] ?? 'Unknown Item', total, topDepts }
+          const topProcFacilities = showProcFacility
+            ? Array.from(procFacilities.entries())
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 2)
+                .map(([fid, count]) => `${dataset.facilities[fid] ?? 'Unknown'} (${count})`)
+                .join(', ')
+            : ''
+          const homeFacility = dataset.itemHomeFacilities[setNameId] ?? ''
+          return {
+            itemName: dataset.setNames[setNameId] ?? 'Unknown Item',
+            total,
+            topDepts,
+            topProcFacilities,
+            homeFacility,
+          }
         })
 
     let totalItems = 0
@@ -771,12 +787,12 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
           otherCount,
           otherRate: toPercent(otherCount, totalFacility),
           topDepts: topDepts.slice(0, 12),
-          topOtherItems: buildTopItems(facItemMap, 20),
+          topOtherItems: buildTopItems(facItemMap, 20, false),
         }
       })
       .sort((a, b) => b.totalItems - a.totalItems)
 
-    const overallTopOtherItems = buildTopItems(overallOtherItemMap, 25)
+    const overallTopOtherItems = buildTopItems(overallOtherItemMap, 25, true)
 
     return { byFacility, totalItems, totalOtherItems, overallOtherRate: toPercent(totalOtherItems, totalItems), overallTopOtherItems }
   }, [dataset, dateRangeSerials, selectedFacilities])
@@ -2101,8 +2117,10 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                           <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
                             <th className="px-2 py-2">#</th>
                             <th className="px-2 py-2">Item Name</th>
+                            <th className="px-2 py-2 text-brand">Home Facility</th>
+                            <th className="px-2 py-2 text-accent">Processed At</th>
                             <th className="px-2 py-2">Cycles</th>
-                            <th className="px-2 py-2">Top Requesting Depts</th>
+                            <th className="px-2 py-2">Requesting Dept</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2110,6 +2128,16 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                             <tr key={`overall-item-${idx}`} className="border-t border-ink/10">
                               <td className="px-2 py-2 text-xs text-muted">{idx + 1}</td>
                               <td className="px-2 py-2 text-ink">{row.itemName}</td>
+                              <td className="px-2 py-2">
+                                <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
+                                  {row.homeFacility || '—'}
+                                </span>
+                              </td>
+                              <td className="px-2 py-2">
+                                <span className="rounded-full bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent">
+                                  {row.topProcFacilities || '—'}
+                                </span>
+                              </td>
                               <td className="px-2 py-2 font-medium text-ink">{row.total.toLocaleString()}</td>
                               <td className="px-2 py-2 text-xs text-muted">{row.topDepts}</td>
                             </tr>
@@ -2167,8 +2195,9 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                               <tr className="text-left text-xs uppercase tracking-[0.14em] text-muted">
                                 <th className="px-2 py-2">#</th>
                                 <th className="px-2 py-2">Item Name</th>
+                                <th className="px-2 py-2 text-brand">Home Facility</th>
                                 <th className="px-2 py-2">Cycles</th>
-                                <th className="px-2 py-2">Top Requesting Depts</th>
+                                <th className="px-2 py-2">Requesting Dept</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -2176,6 +2205,11 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
                                 <tr key={`fac-item-${idx}`} className="border-t border-ink/10">
                                   <td className="px-2 py-2 text-xs text-muted">{idx + 1}</td>
                                   <td className="px-2 py-2 text-ink">{row.itemName}</td>
+                                  <td className="px-2 py-2">
+                                    <span className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
+                                      {row.homeFacility || '—'}
+                                    </span>
+                                  </td>
                                   <td className="px-2 py-2 font-medium text-ink">{row.total.toLocaleString()}</td>
                                   <td className="px-2 py-2 text-xs text-muted">{row.topDepts}</td>
                                 </tr>
