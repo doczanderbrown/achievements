@@ -391,9 +391,10 @@ const ITEMS_DETAILS_TARGET_COLS = new Set(['B', 'I'])
 
 export const parseEndeavorWorkbook = async (
   file: File,
+  itemHomeMap: Map<string, string>,
   onProgress?: (progress: ParseProgress) => void,
 ): Promise<ProcessingLocationDataset> => {
-  const { dataEntry, itemsEntry } = await resolveEndeavorSheetEntries(file)
+  const { dataEntry } = await resolveEndeavorSheetEntries(file)
   if (!dataEntry) {
     throw new Error(
       'Endeavor workbook format not recognized. Expected a "Processing Data" or "data" sheet.',
@@ -428,20 +429,8 @@ export const parseEndeavorWorkbook = async (
   const rowSpecialtyIds: number[] = []
   const iussTokenArr: string[] = []
 
-  const itemDetailNameTokens: string[] = []
-  const itemDetailFacilityTokens: string[] = []
-
   let parsedRows = 0
   let skippedRows = 0
-
-  const itemsParser = createWorksheetRowParser(ITEMS_DETAILS_TARGET_COLS, (rowNumber, cells) => {
-    if (rowNumber === 1) return
-    const nameToken = tokenFromCell(cells.I)
-    const facilityToken = tokenFromCell(cells.B)
-    if (!nameToken || !facilityToken) return
-    itemDetailNameTokens.push(nameToken)
-    itemDetailFacilityTokens.push(facilityToken)
-  })
 
   const dataParser = createWorksheetRowParser(ENDEAVOR_TARGET_COLS, (rowNumber, cells) => {
     if (rowNumber <= 2) return
@@ -504,10 +493,7 @@ export const parseEndeavorWorkbook = async (
     loadRowsParsed: 0,
   })
 
-  const sheetHandlers = new Map<string, EntryHandler>([[dataEntry, dataParser]])
-  if (itemsEntry) sheetHandlers.set(itemsEntry, itemsParser)
-
-  await runZipPass(file, sheetHandlers)
+  await runZipPass(file, new Map<string, EntryHandler>([[dataEntry, dataParser]]))
 
   const neededSharedIndices = new Set<number>()
   ;[
@@ -518,8 +504,6 @@ export const parseEndeavorWorkbook = async (
     invNameTokens,
     loadTokens,
     iussTokenArr,
-    itemDetailNameTokens,
-    itemDetailFacilityTokens,
   ].forEach((tokens) => {
     tokens.forEach((token) => {
       const index = sharedIndexFromToken(token)
@@ -591,28 +575,16 @@ export const parseEndeavorWorkbook = async (
     }
   }
 
-  // Build cross-site lookup from Items Details
-  const itemHomeMap = new Map<string, Set<string>>()
-  for (let i = 0; i < itemDetailNameTokens.length; i += 1) {
-    const rawName = normalizeLabel(decodeTokenLabel(itemDetailNameTokens[i], sharedLookup), '')
-    const baseName = stripItemSuffix(rawName).toLowerCase()
-    const facility = normalizeLabel(decodeTokenLabel(itemDetailFacilityTokens[i], sharedLookup), '')
-    if (!baseName || !facility) continue
-    const existing = itemHomeMap.get(baseName) ?? new Set<string>()
-    existing.add(facility)
-    itemHomeMap.set(baseName, existing)
-  }
-
-  // Map invName token ID → home facilities
-  const setNameToHomes = new Map<number, Set<string>>()
+  // Map invName token ID → home facility using the pre-built itemHomeMap
+  const setNameToHome = new Map<number, string>()
   const itemHomeFacilities: string[] = new Array(invNameTokens.length).fill('')
   for (let tokenId = 0; tokenId < invNameTokens.length; tokenId += 1) {
     const fullName = normalizeLabel(decodeTokenLabel(invNameTokens[tokenId], sharedLookup), '')
     const baseName = stripItemSuffix(fullName).toLowerCase()
-    const homes = itemHomeMap.get(baseName)
-    if (homes) {
-      setNameToHomes.set(tokenId, homes)
-      itemHomeFacilities[tokenId] = [...homes][0] ?? ''
+    const home = itemHomeMap.get(baseName)
+    if (home) {
+      setNameToHome.set(tokenId, home)
+      itemHomeFacilities[tokenId] = home
     }
   }
 
@@ -630,8 +602,8 @@ export const parseEndeavorWorkbook = async (
     finalMethodIds[i] = methodRemap[rowMethodIds[i]]
 
     const procFacility = facilityLabels[rowFacilityIds[i]] ?? ''
-    const homes = setNameToHomes.get(rowInvNameIds[i])
-    if (homes && !homes.has(procFacility)) offsiteFlags[i] = 1
+    const home = setNameToHome.get(rowInvNameIds[i])
+    if (home && home !== procFacility) offsiteFlags[i] = 1
 
     const dateSerial = rowDateSerials[i]
     if (dateSerial < minDateSerial) minDateSerial = dateSerial

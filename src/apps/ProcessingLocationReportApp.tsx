@@ -302,7 +302,25 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       let caseRouting = null
 
       if (endeavor) {
-        parsed = await parseEndeavorWorkbook(file, (p) => setProgress(p))
+        // Build item home facility map using XLSX (reliable) before streaming parse
+        setProgress({ phase: 'sheets', message: 'Reading Items Details for home facility lookup...' })
+        const itemHomeMap = new Map<string, string>()
+        const itemsSheetName = wbMeta.SheetNames.find((n) => n.toLowerCase() === 'items details' || n.toLowerCase() === 'items detail')
+        if (itemsSheetName) {
+          const wbItems = XLSX.read(buffer, { sheets: itemsSheetName })
+          const ws = wbItems.Sheets[itemsSheetName]
+          if (ws) {
+            const rows = XLSX.utils.sheet_to_json<(string | number)[]>(ws, { header: 1, defval: '' })
+            rows.slice(1).forEach((row) => {
+              const rawName = String(row[8] ?? '').trim()
+              const facility = String(row[1] ?? '').trim()
+              if (!rawName || !facility) return
+              const base = rawName.replace(/\s*-\s*\d+\s*$/, '').trim().toLowerCase()
+              if (base) itemHomeMap.set(base, facility)
+            })
+          }
+        }
+        parsed = await parseEndeavorWorkbook(file, itemHomeMap, (p) => setProgress(p))
       } else {
         parsed = await parseProcessingLocationWorkbook(file, (nextProgress) => {
           setProgress(nextProgress)
