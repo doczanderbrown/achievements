@@ -351,12 +351,6 @@ const ProcessingLocationReportApp = ({ onBack }: ProcessingLocationReportAppProp
       setActiveTab(
         endeavor ? 'cross-site' : (merged.rows.dateSerials.length > 0 ? 'mix' : merged.caseRouting ? 'case-routing' : 'mix'),
       )
-      if (endeavor && merged.facilityOptions.length > 0) {
-        const nchIds = merged.facilityOptions
-          .filter((o) => o.label.toLowerCase().includes('nch'))
-          .map((o) => o.id)
-        setSelectedFacilities(nchIds)
-      }
       setDrilldown(null)
       setDrilldownPage(1)
       setCaseDrilldown(null)
