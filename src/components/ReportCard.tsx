@@ -1,19 +1,123 @@
 import { useId } from 'react'
-import {
-  Bar,
-  BarChart,
-  PolarAngleAxis,
-  PolarGrid,
-  PolarRadiusAxis,
-  Radar,
-  RadarChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
-import { DEFAULT_METRICS, formatMetricValue } from '../utils/metrics'
-import type { BadgeTier, MetricDefinition, MetricKey, PillarTotals, UserRecord } from '../utils/metrics'
+import type { MetricKey, PillarTotals, UserRecord } from '../utils/metrics'
+
+// ─── palette ──────────────────────────────────────────────────────────────────
+
+const P = {
+  assembly:     '#e3870a',
+  decon:        '#2b58ff',
+  sterilize:    '#0f9a6a',
+  ink:          '#1a1714',
+  ink2:         '#2e2823',
+  card:         '#fbf8f1',
+  cardEdge:     '#ece4d2',
+  muted1:       '#7c7468',
+  rule:         '#e3dac6',
+  ruleStrong:   '#cabfa6',
+  paper2:       '#ece4d2',
+  good:         '#0f7a4e',
+  bad:          '#b53326',
+} as const
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+const ordinal = (n: number) => {
+  const r = Math.round(n)
+  const m = r % 100
+  if (m >= 11 && m <= 13) return 'th'
+  switch (r % 10) {
+    case 1: return 'st'
+    case 2: return 'nd'
+    case 3: return 'rd'
+    default: return 'th'
+  }
+}
+
+const fmtInt = (n: number) => Math.round(n).toLocaleString('en-US')
+const fmtPct = (v: number, digits = 2) => `${(v * 100).toFixed(digits)}%`
+const fmtSigned = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(Math.round(v))}`
+const trendColor = (v: number) => (v > 0.5 ? P.good : v < -0.5 ? P.bad : P.muted1)
+const trendArrow = (v: number) => (v > 0.5 ? '▲' : v < -0.5 ? '▼' : '•')
+
+const STOPWORDS = new Set(['the','a','an','of','and','or','you','in','it','on','at','for','to','is','are'])
+
+const monogramFor = (label: string) => {
+  if (!label) return '??'
+  const cleaned = label.replace(/'s\b/gi, '').replace(/[^A-Za-z0-9\s-]/g, ' ')
+  const words = cleaned.split(/[\s-]+/).filter((w) => w && !STOPWORDS.has(w.toLowerCase()))
+  if (!words.length) return label.slice(0, 2).toUpperCase()
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase()
+}
+
+// font shorthand objects for spreading into style props
+const fD: React.CSSProperties = { fontFamily: '"Space Grotesk", system-ui, sans-serif' }
+const fM: React.CSSProperties = { fontFamily: '"IBM Plex Mono", "Courier New", monospace' }
+
+// ─── SVG rings ────────────────────────────────────────────────────────────────
+
+const Ring = ({
+  cx, cy, r, stroke, value, color,
+}: {
+  cx: number; cy: number; r: number; stroke: number; value: number; color: string
+}) => {
+  const C = 2 * Math.PI * r
+  const pct = Math.max(0, Math.min(100, value)) / 100
+  const filled = C * pct
+  const empty = C - filled
+  return (
+    <g transform={`rotate(-90 ${cx} ${cy})`}>
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" opacity="0.14" />
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={`${filled} ${empty + 0.0001}`} />
+    </g>
+  )
+}
+
+const RingTick = ({
+  cx, cy, r, value, color,
+}: {
+  cx: number; cy: number; r: number; value: number; color: string
+}) => {
+  const ang = (value / 100) * Math.PI * 2 - Math.PI / 2
+  return (
+    <circle
+      cx={cx + Math.cos(ang) * r}
+      cy={cy + Math.sin(ang) * r}
+      r={3.4} fill="#fff" stroke={color} strokeWidth="2"
+    />
+  )
+}
+
+const PillarRings = ({
+  assembly, decon, sterilize, filterId,
+}: {
+  assembly: number; decon: number; sterilize: number; filterId: string
+}) => (
+  <svg
+    viewBox="0 0 400 400"
+    style={{ width: '100%', height: '100%', display: 'block' }}
+    aria-label="Pillar percentile rings"
+  >
+    <defs>
+      <filter id={filterId} x="-10%" y="-10%" width="120%" height="120%">
+        <feGaussianBlur in="SourceAlpha" stdDeviation="3" />
+        <feOffset dx="0" dy="1" result="off" />
+        <feComponentTransfer><feFuncA type="linear" slope="0.18" /></feComponentTransfer>
+        <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
+      </filter>
+    </defs>
+    <g filter={`url(#${filterId})`}>
+      <Ring cx={200} cy={200} r={168} stroke={20} value={assembly} color={P.assembly} />
+      <Ring cx={200} cy={200} r={132} stroke={20} value={decon}    color={P.decon} />
+      <Ring cx={200} cy={200} r={96}  stroke={20} value={sterilize} color={P.sterilize} />
+    </g>
+    <RingTick cx={200} cy={200} r={168} value={assembly}  color={P.assembly} />
+    <RingTick cx={200} cy={200} r={132} value={decon}     color={P.decon} />
+    <RingTick cx={200} cy={200} r={96}  value={sterilize} color={P.sterilize} />
+  </svg>
+)
+
+// ─── component ────────────────────────────────────────────────────────────────
 
 type ReportCardProps = {
   user: UserRecord
@@ -26,630 +130,709 @@ type ReportCardProps = {
   onClick?: () => void
   interactive?: boolean
   className?: string
-}
-
-const getPercentileColor = (percentile: number) => {
-  if (percentile >= 75) return 'text-green-600'
-  if (percentile >= 25) return 'text-blue-600'
-  return 'text-red-600'
-}
-
-const ScoreBlock = ({
-  label,
-  percentile,
-}: {
-  label: string
-  percentile: number
-}) => {
-  const rounded = Math.round(percentile)
-  const colorClass = getPercentileColor(rounded)
-  const suffix = (() => {
-    const mod100 = rounded % 100
-    if (mod100 >= 11 && mod100 <= 13) return 'th'
-    switch (rounded % 10) {
-      case 1:
-        return 'st'
-      case 2:
-        return 'nd'
-      case 3:
-        return 'rd'
-      default:
-        return 'th'
-    }
-  })()
-  return (
-    <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 shadow-sm">
-      <div className="text-xs uppercase tracking-[0.18em] text-muted">{label}</div>
-      <div className="mt-2 flex items-end justify-between">
-        <div className={`text-3xl font-semibold ${colorClass}`}>
-          {rounded}
-          <span className="ml-1 text-sm font-medium text-muted">
-            {suffix} Percentile
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const OverallScoreBlock = ({ score, percentile }: { score: number; percentile: number }) => {
-  const colorClass = getPercentileColor(percentile)
-  const rounded = Math.round(percentile)
-  const suffix = (() => {
-    const mod100 = rounded % 100
-    if (mod100 >= 11 && mod100 <= 13) return 'th'
-    switch (rounded % 10) {
-      case 1:
-        return 'st'
-      case 2:
-        return 'nd'
-      case 3:
-        return 'rd'
-      default:
-        return 'th'
-    }
-  })()
-  return (
-    <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 text-center shadow-sm">
-      <div className="text-xs uppercase tracking-[0.18em] text-muted">
-        Overall Processing Score
-      </div>
-      <div className="mt-3 flex flex-col items-center gap-1">
-        <div className={`text-5xl font-semibold leading-none ${colorClass}`}>
-          {rounded}
-          <span className="ml-1 text-lg font-medium text-muted">{suffix}</span>
-        </div>
-        <div className="text-sm font-medium text-muted">Percentile</div>
-        <div className="mt-1 text-2xl font-semibold text-ink/80">{score.toFixed(0)}</div>
-        <div className="text-xs uppercase tracking-[0.18em] text-muted">Overall score</div>
-      </div>
-    </div>
-  )
-}
-
-const MetricScoreBlock = ({
-  label,
-  percentile,
-}: {
-  label: string
-  percentile: number
-}) => {
-  const rounded = Math.round(percentile)
-  const colorClass = getPercentileColor(rounded)
-  const suffix = (() => {
-    const mod100 = rounded % 100
-    if (mod100 >= 11 && mod100 <= 13) return 'th'
-    switch (rounded % 10) {
-      case 1:
-        return 'st'
-      case 2:
-        return 'nd'
-      case 3:
-        return 'rd'
-      default:
-        return 'th'
-    }
-  })()
-  return (
-    <div className="rounded-2xl border border-ink/10 bg-white/85 px-4 py-3 shadow-sm">
-      <div className="text-xs uppercase tracking-[0.18em] text-muted">{label}</div>
-      <div className="mt-2 flex items-end">
-        <div className={`text-3xl font-semibold ${colorClass}`}>
-          {rounded}
-          <span className="ml-1 text-sm font-medium text-muted">
-            {suffix} Percentile
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const metricHelper = (metric: MetricDefinition) => {
-  if (metric.helper) return metric.helper
-  return ''
-}
-
-const TIER_STYLES: Record<BadgeTier, { bg: string; border: string; text: string; icon: string }> = {
-  bronze: {
-    bg: 'bg-amber-50',
-    border: 'border-amber-300',
-    text: 'text-amber-800',
-    icon: '🥉',
-  },
-  silver: {
-    bg: 'bg-slate-50',
-    border: 'border-slate-300',
-    text: 'text-slate-700',
-    icon: '🥈',
-  },
-  gold: {
-    bg: 'bg-yellow-50',
-    border: 'border-yellow-400',
-    text: 'text-yellow-800',
-    icon: '🥇',
-  },
-}
-
-const BadgeChip = ({ badge }: { badge: import('../utils/metrics').Badge }) => {
-  const styles = TIER_STYLES[badge.tier]
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${styles.bg} ${styles.border} ${styles.text}`}
-    >
-      <span>{styles.icon}</span>
-      {badge.label}
-    </span>
-  )
+  period?: string
 }
 
 const ReportCard = ({
   user,
   medians,
-  pillarMedians,
-  anonymize,
   hoursWorkedAvailable,
-  showArchetypeDescription = false,
   shortPillarLabels = false,
   onClick,
   interactive = false,
   className = '',
+  period,
+  anonymize,
 }: ReportCardProps) => {
+  const uid = useId().replace(/:/g, '')
   const displayName = anonymize ? user.techLabel : user.name
+
+  const totalPillar = user.pillarTotals.decon + user.pillarTotals.assembly + user.pillarTotals.sterilize
+
+  const workMixRaw = {
+    assembly:  totalPillar ? (user.pillarTotals.assembly  / totalPillar) * 100 : 0,
+    decon:     totalPillar ? (user.pillarTotals.decon     / totalPillar) * 100 : 0,
+    sterilize: totalPillar ? (user.pillarTotals.sterilize / totalPillar) * 100 : 0,
+  }
+  // round and fix to exactly 100
+  const workMix = {
+    assembly:  Math.round(workMixRaw.assembly),
+    decon:     Math.round(workMixRaw.decon),
+    sterilize: 100 - Math.round(workMixRaw.assembly) - Math.round(workMixRaw.decon),
+  }
+
+  const overallPct  = Math.round(user.scores.overallPercentile)
+  const prodPct     = Math.round(user.scores.productivityPercentile)
+  const qualPct     = Math.round(user.scores.qualityPercentile)
+  const versPct     = Math.round(user.scores.versatilityPercentile)
+  const assemblyPct = Math.round(user.pillarPercentiles.assembly)
+  const deconPct    = Math.round(user.pillarPercentiles.decon)
+  const sterilPct   = Math.round(user.pillarPercentiles.sterilize)
+
   const deconLabel = shortPillarLabels ? 'Decon' : 'Decontamination'
-  const hasNoHoursWorked = hoursWorkedAvailable && user.hoursWorked <= 0
-  const chartPatternId = useId().replace(/:/g, '')
-  const medianPatternId = `${chartPatternId}-median-bar`
-  const userPatternId = `${chartPatternId}-user-bar`
 
-  const comparisonItems = DEFAULT_METRICS.filter(
-    (metric) => hoursWorkedAvailable || metric.key !== 'workedHoursPerUnit',
-  ).map((metric) => {
-    const value = user.metrics[metric.key]
-    const median = medians[metric.key]
-    return {
-      metric,
-      value,
-      median,
-      delta: value - median,
-    }
-  })
-
-  const barData = [
+  const pillarRows = [
     {
-      name: deconLabel,
-      User: user.pillarTotals.decon,
-      Median: pillarMedians.decon,
+      key: 'assembly',
+      label: 'Assembly',
+      sub: 'Trays · packs · instruments',
+      color: P.assembly,
+      pct: assemblyPct,
+      total: user.pillarTotals.assembly,
+      unit: 'instruments',
+      trend: assemblyPct - 50,
     },
     {
-      name: 'Assembly',
-      User: user.pillarTotals.assembly,
-      Median: pillarMedians.assembly,
+      key: 'decon',
+      label: deconLabel,
+      sub: 'Scans · sink instruments · sink trays',
+      color: P.decon,
+      pct: deconPct,
+      total: user.pillarTotals.decon,
+      unit: 'scans',
+      trend: deconPct - 50,
     },
     {
-      name: 'Sterilize',
-      User: user.pillarTotals.sterilize,
-      Median: pillarMedians.sterilize,
+      key: 'sterilize',
+      label: 'Sterilization',
+      sub: 'Loads · items · deliver scans',
+      color: P.sterilize,
+      pct: sterilPct,
+      total: user.pillarTotals.sterilize,
+      unit: 'loads',
+      trend: sterilPct - 50,
     },
   ]
 
-  const radarData = [
-    { pillar: deconLabel, value: user.pillarPercentiles.decon },
-    { pillar: 'Assembly', value: user.pillarPercentiles.assembly },
-    { pillar: 'Sterilize', value: user.pillarPercentiles.sterilize },
-    { pillar: 'Quality', value: user.scores.qualityPercentile },
-  ]
+  const weakestPillar = pillarRows.reduce((a, b) => (a.pct < b.pct ? a : b))
 
-  const totalPillarActivity =
-    user.pillarTotals.decon + user.pillarTotals.assembly + user.pillarTotals.sterilize
-  const deconShare = totalPillarActivity ? (user.pillarTotals.decon / totalPillarActivity) * 100 : 0
-  const assemblyShare = totalPillarActivity
-    ? (user.pillarTotals.assembly / totalPillarActivity) * 100
-    : 0
-  const sterilizeShare = totalPillarActivity
-    ? (user.pillarTotals.sterilize / totalPillarActivity) * 100
-    : 0
+  const dominantMix =
+    workMix.assembly >= workMix.decon && workMix.assembly >= workMix.sterilize
+      ? { name: 'Assembly', pct: workMix.assembly }
+      : workMix.decon >= workMix.sterilize
+        ? { name: 'Decon', pct: workMix.decon }
+        : { name: 'Sterilize', pct: workMix.sterilize }
 
-
-  const productivityDrivers = [
-    { key: 'assembly', label: 'Assembly', value: user.productivityDrivers.assembly },
-    { key: 'sterilize', label: 'Sterilize', value: user.productivityDrivers.sterilize },
-    { key: 'decon', label: 'Decontamination', value: user.productivityDrivers.decon },
-  ].sort((a, b) => b.value - a.value)
-
-  const timekeepingChips = [
-    {
-      key: 'pto',
-      label: 'PTO',
-      value: user.timekeepingContext.ptoHours,
-    },
-    {
-      key: 'unpaid',
-      label: 'Unpaid',
-      value: user.timekeepingContext.unpaidHours,
-    },
-    {
-      key: 'on-call',
-      label: 'On-call',
-      value: user.timekeepingContext.onCallHours,
-    },
-    {
-      key: 'ot',
-      label: 'OT',
-      value: user.timekeepingContext.overtimeHours,
-    },
-  ].filter((item) => item.value > 0)
-
-  const qualityChips = [
-    {
-      key: 'events',
-      label: 'Quality hits',
-      value: user.qualityContext.eventCount,
-    },
-    {
-      key: 'coaching',
-      label: 'Coaching',
-      value: user.qualityContext.coachingCount,
-    },
-  ].filter((item) => item.value !== null && item.value !== 0)
-
-  const interactiveClasses = interactive
-    ? 'cursor-pointer transition hover:-translate-y-0.5 hover:shadow-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60'
-    : ''
+  const archGlyph = monogramFor(user.archetype.label)
 
   return (
     <article
-      className={`relative flex h-full flex-col gap-5 overflow-hidden rounded-3xl border p-6 shadow-lg ${
-        hasNoHoursWorked ? 'border-warning/50 bg-warning/10' : 'border-brand/20 bg-panel/95'
-      } ${interactiveClasses} ${className}`}
+      style={{
+        position: 'relative',
+        background: P.card,
+        border: `1px solid ${P.cardEdge}`,
+        borderRadius: '22px',
+        overflow: 'hidden',
+        boxShadow:
+          '0 1px 0 rgba(26,23,20,0.06), 0 2px 6px rgba(26,23,20,0.04), 0 30px 60px -30px rgba(26,23,20,0.32)',
+        color: P.ink,
+        cursor: interactive ? 'pointer' : undefined,
+      }}
+      className={`${interactive ? 'transition hover:-translate-y-0.5 hover:shadow-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2' : ''} ${className}`}
       onClick={onClick}
-      onKeyDown={(event) => {
+      onKeyDown={(e) => {
         if (!interactive) return
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          onClick?.()
-        }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.() }
       }}
       role={interactive ? 'button' : undefined}
       tabIndex={interactive ? 0 : undefined}
     >
-      <div
-        className={`absolute inset-x-0 top-0 h-1.5 ${
-          hasNoHoursWorked
-            ? 'bg-gradient-to-r from-warning via-warning/80 to-warning/50'
-            : 'bg-gradient-to-r from-brand via-accent to-brand/60'
-        }`}
-      />
-      <div className="flex flex-wrap items-start justify-between gap-3 pt-3">
+
+      {/* ── top strap ─────────────────────────────────────────────────── */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '16px 32px',
+        borderBottom: `1px dashed ${P.ruleStrong}`,
+        ...fM,
+        fontSize: '11px',
+        textTransform: 'uppercase',
+        letterSpacing: '0.14em',
+        color: P.ink2,
+      }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', fontWeight: 600 }}>
+          <span style={{
+            width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+            background: `conic-gradient(from 220deg at 50% 50%, ${P.assembly} 0deg, ${P.decon} 140deg, ${P.sterilize} 260deg, ${P.assembly} 360deg)`,
+            boxShadow: `inset 0 0 0 2px ${P.card}`,
+            display: 'inline-block',
+          }} aria-hidden="true" />
+          SPD Report Card{period ? ` · ${period}` : ''}
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '14px', color: P.muted1 }}>
+          <span>{user.facility || 'SPD'}</span>
+          <span style={{ width: 4, height: 4, background: P.ruleStrong, borderRadius: '50%', display: 'inline-block' }} aria-hidden="true" />
+          <span style={{ color: P.ink, fontWeight: 600 }}>{user.techLabel}</span>
+        </span>
+      </div>
+
+      {/* ── hero ──────────────────────────────────────────────────────── */}
+      <section style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 400px',
+        gap: '32px',
+        padding: '36px 32px 24px',
+        alignItems: 'stretch',
+      }}>
+        {/* identity */}
         <div>
-          <div className="text-xs uppercase tracking-[0.2em] text-muted">Report Card</div>
-          <h3 className="mt-2 text-2xl font-semibold text-ink">{displayName}</h3>
-          {user.role ? (
-            <div className="mt-1 text-xs font-medium uppercase tracking-[0.12em] text-muted">
-              {user.role}
-            </div>
-          ) : null}
-          <div className="mt-1 text-sm text-muted">
-            {hoursWorkedAvailable
-              ? `Hours Worked: ${user.hoursWorked.toFixed(1)}`
-              : 'Hours Worked not found'}
+          <div style={{ ...fM, fontSize: '11px', letterSpacing: '0.18em', textTransform: 'uppercase', color: P.muted1 }}>
+            Tech file · personal record
           </div>
-          {hasNoHoursWorked ? (
-            <div className="mt-1 text-xs font-medium text-warning">
-              {user.productivityRanked
-                ? 'Hours Worked is 0 or missing for this user.'
-                : 'Excluded from productivity peer ranking (Hours Worked missing or 0).'}
-            </div>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-2 text-sm font-medium text-ink">
-          <span className="text-lg">{user.archetype.icon}</span>
-          <div>
-            <div className="text-sm font-semibold">{user.archetype.label}</div>
-            {showArchetypeDescription ? (
-              <div className="text-xs text-muted">{user.archetype.description}</div>
-            ) : null}
+          <h1 style={{
+            ...fD,
+            fontSize: 'clamp(36px, 4.5vw, 62px)',
+            fontWeight: 600,
+            letterSpacing: '-0.02em',
+            lineHeight: 0.96,
+            margin: '10px 0 6px',
+            color: P.ink,
+          }}>
+            {displayName}
+          </h1>
+          <div style={{ fontSize: '14px', color: P.muted1 }}>
+            {user.role}{user.facility ? ` · ${user.facility} SPD` : ''}
           </div>
-        </div>
-      </div>
 
-      <div className="space-y-3">
-        <OverallScoreBlock
-          score={user.scores.overall}
-          percentile={user.scores.overallPercentile}
-        />
-        <div className="grid gap-3 md:grid-cols-3">
-          <ScoreBlock
-            label="Productivity"
-            percentile={user.scores.productivityPercentile}
-          />
-          <MetricScoreBlock
-            label="Defect Rate"
-            percentile={user.percentiles.defectRate}
-          />
-          <MetricScoreBlock
-            label="Missing Instruments"
-            percentile={user.percentiles.assemblyMissingInst}
-          />
-        </div>
-      </div>
-
-      {timekeepingChips.length > 0 || qualityChips.length > 0 ? (
-        <section className="space-y-3">
-          <h4 className="text-sm font-semibold text-ink">Context</h4>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-2xl border border-ink/10 bg-white/85 p-3">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                Timekeeping
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {timekeepingChips.length > 0 ? (
-                  timekeepingChips.map((chip) => (
-                    <span
-                      key={chip.key}
-                      className="rounded-full border border-ink/10 bg-brand/10 px-2.5 py-1 text-xs font-medium text-ink"
-                    >
-                      {chip.label} {chip.value.toFixed(1)}h
-                    </span>
-                  ))
-                ) : (
-                  <span className="text-xs text-muted">No additional timekeeping context.</span>
-                )}
+          {/* archetype badge */}
+          <div style={{
+            marginTop: '24px',
+            display: 'inline-flex',
+            alignItems: 'stretch',
+            background: P.ink,
+            color: P.card,
+            borderRadius: '14px',
+            overflow: 'hidden',
+            maxWidth: '100%',
+          }} aria-label={`Archetype: ${user.archetype.label}`}>
+            <div style={{
+              display: 'grid',
+              placeItems: 'center',
+              padding: '0 16px',
+              background: `linear-gradient(160deg, ${P.assembly} 0%, #ffb84a 90%)`,
+              color: P.ink,
+              ...fD,
+              fontWeight: 700,
+              fontSize: '19px',
+              letterSpacing: '0.02em',
+              minWidth: '58px',
+              textAlign: 'center',
+            }}>
+              <div>{archGlyph}</div>
+              <div style={{ ...fM, fontSize: '9px', fontWeight: 500, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'rgba(26,23,20,0.65)', marginTop: '2px' }}>
+                Archetype
               </div>
             </div>
-            <div className="rounded-2xl border border-ink/10 bg-white/85 p-3">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                Quality Inputs
+            <div style={{ padding: '13px 18px' }}>
+              <div style={{ ...fD, fontSize: '19px', fontWeight: 600, letterSpacing: '-0.005em', lineHeight: 1.05 }}>
+                {user.archetype.label}
               </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {qualityChips.length > 0 ? (
-                  qualityChips.map((chip) => (
-                    <span
-                      key={chip.key}
-                      className="rounded-full border border-ink/10 bg-accent/10 px-2.5 py-1 text-xs font-medium text-ink"
-                    >
-                      {chip.label} {chip.value}
-                    </span>
-                  ))
-                ) : (
-                  <span className="text-xs text-muted">No person-level quality context found.</span>
-                )}
+              <div style={{ marginTop: '4px', fontSize: '12px', color: 'rgba(251,248,241,0.7)', maxWidth: '340px' }}>
+                {user.archetype.description}
               </div>
             </div>
           </div>
-        </section>
-      ) : null}
 
-      <section>
-        <div className="flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-ink">Peer comparison</h4>
-        </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {comparisonItems.map((item) => (
-            <div key={item.metric.key} className="metric-chip">
-              <div className="flex items-center justify-between text-xs text-muted">
-                <span>{item.metric.label}</span>
-                {metricHelper(item.metric) ? (
-                  <span className="text-[10px] uppercase tracking-[0.12em]">
-                    {metricHelper(item.metric)}
-                  </span>
-                ) : null}
+          {/* stats stripe */}
+          <div style={{
+            marginTop: '24px',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+            gap: '8px',
+            paddingTop: '16px',
+            borderTop: `1px solid ${P.rule}`,
+            ...fM,
+            fontSize: '10px',
+            letterSpacing: '0.16em',
+            textTransform: 'uppercase',
+            color: P.muted1,
+          }}>
+            {[
+              {
+                label: 'Hours worked',
+                value: hoursWorkedAvailable ? user.hoursWorked.toFixed(1) : '—',
+                unit: hoursWorkedAvailable ? 'h' : '',
+              },
+              { label: 'Units of service', value: fmtInt(totalPillar), unit: '' },
+              { label: 'Quality score',    value: String(qualPct),     unit: 'th pct' },
+              { label: 'Defect rate',      value: fmtPct(user.metrics.defectRate, 2), unit: '' },
+            ].map((stat) => (
+              <div key={stat.label} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {stat.label}
+                <span style={{ ...fD, fontSize: '21px', fontWeight: 600, letterSpacing: '-0.015em', color: P.ink, textTransform: 'none', lineHeight: 1, display: 'inline-flex', alignItems: 'baseline', gap: '2px' }}>
+                  {stat.value}
+                  {stat.unit ? <small style={{ ...fM, fontSize: '10px', fontWeight: 500, color: P.muted1, letterSpacing: '0.04em' }}>{stat.unit}</small> : null}
+                </span>
               </div>
-              <div className="mt-2 flex items-end justify-between">
-                <div
-                  className={`text-lg font-semibold ${
-                    item.metric.format === 'rate'
-                      ? item.delta < 0
-                        ? 'text-green-600'
-                        : item.delta > 0
-                          ? 'text-red-600'
-                          : 'text-ink'
-                      : 'text-ink'
-                  }`}
-                >
-                  {formatMetricValue(item.value, item.metric)}
-                </div>
-                <div className="text-right text-[10px] text-muted">
-                  Median {formatMetricValue(item.median, item.metric)}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="space-y-3">
-        <h4 className="text-sm font-semibold text-ink">Badges</h4>
-        {user.badges.length ? (
-          <div className="flex flex-wrap gap-2">
-            {user.badges.map((badge) => (
-              <BadgeChip key={`${badge.category}-${badge.tier}`} badge={badge} />
             ))}
           </div>
-        ) : (
-          <div className="text-sm text-muted">No badges yet.</div>
-        )}
-      </section>
+        </div>
 
-      {showArchetypeDescription ? (
-        <section className="rounded-2xl border border-ink/10 bg-white/85 p-3 text-sm text-muted">
-          <details>
-            <summary className="cursor-pointer font-semibold text-ink">
-              Why your productivity score looks this way
-            </summary>
-            <div className="mt-2 space-y-2">
-              {user.productivityDrivers.basis === 'excluded' ? (
-                <div>
-                  This user is excluded from productivity peer ranking because Hours Worked is
-                  missing or 0.
-                </div>
-              ) : (
-                <div>
-                  Your productivity is driven mostly by{' '}
-                  <span className="font-semibold text-ink">
-                    {productivityDrivers[0].value.toFixed(0)}% {productivityDrivers[0].label}
-                  </span>{' '}
-                  and{' '}
-                  <span className="font-semibold text-ink">
-                    {productivityDrivers[1].value.toFixed(0)}% {productivityDrivers[1].label}
+        {/* rings panel */}
+        <div style={{
+          background: 'radial-gradient(120% 80% at 50% 0%, #fff 0%, #fbf8f1 70%)',
+          border: `1px solid ${P.rule}`,
+          borderRadius: '18px',
+          padding: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'baseline',
+            ...fM,
+            fontSize: '10px',
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            color: P.muted1,
+          }}>
+            <span>Overall · Pillar percentiles</span>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'baseline',
+              gap: '4px',
+              padding: '3px 10px',
+              border: `1px solid ${P.ruleStrong}`,
+              borderRadius: '999px',
+              background: P.card,
+              color: P.ink,
+              whiteSpace: 'nowrap',
+            }}>
+              <small style={{ fontSize: '9px', letterSpacing: '0.12em', color: P.muted1 }}>Score</small>
+              <span style={{ ...fD, fontSize: '13px', fontWeight: 600, letterSpacing: '-0.01em' }}>{Math.round(user.scores.overall)}</span>
+              <small style={{ fontSize: '9px', letterSpacing: '0.12em', color: P.muted1 }}>/ 200</small>
+            </span>
+          </div>
+
+          {/* ring stage */}
+          <div style={{ position: 'relative', aspectRatio: '1 / 1', margin: '0 auto', width: '100%', maxWidth: '320px' }}>
+            <PillarRings
+              assembly={assemblyPct}
+              decon={deconPct}
+              sterilize={sterilPct}
+              filterId={`ringShadow-${uid}`}
+            />
+            <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', textAlign: 'center', pointerEvents: 'none' }}>
+              <div>
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'baseline',
+                  gap: '2px',
+                  ...fD,
+                  fontSize: 'clamp(48px, 7vw, 72px)',
+                  fontWeight: 600,
+                  letterSpacing: '-0.04em',
+                  lineHeight: 0.85,
+                  color: P.ink,
+                }}>
+                  {overallPct}
+                  <span style={{ fontSize: '19px', fontWeight: 500, color: P.muted1, letterSpacing: '0.01em', alignSelf: 'flex-start', marginTop: '13px' }}>
+                    {ordinal(overallPct)}
                   </span>
-                  , with{' '}
-                  <span className="font-semibold text-ink">
-                    {productivityDrivers[2].value.toFixed(0)}% {productivityDrivers[2].label}
-                  </span>{' '}
-                  contributing as well.
                 </div>
-              )}
-              <div className="text-xs text-muted">
-                {user.productivityDrivers.basis === 'rates'
-                  ? 'Based on per-hour pillar rates.'
-                  : user.productivityDrivers.basis === 'totals'
-                    ? 'Based on pillar totals.'
-                    : 'No productivity percentile is assigned until Hours Worked is provided.'}
+                <div style={{ ...fM, fontSize: '9px', letterSpacing: '0.2em', textTransform: 'uppercase', color: P.muted1, marginTop: '6px' }}>
+                  Overall percentile
+                </div>
               </div>
             </div>
-          </details>
+          </div>
+
+          {/* legend */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px', paddingTop: '4px', borderTop: `1px dashed ${P.rule}` }}>
+            {([
+              { label: 'Assembly', color: P.assembly, pct: assemblyPct },
+              { label: 'Decon',    color: P.decon,    pct: deconPct },
+              { label: 'Sterilize',color: P.sterilize,pct: sterilPct },
+            ] as const).map((leg) => (
+              <div key={leg.label} style={{ display: 'flex', flexDirection: 'column', gap: '3px', padding: '6px 4px' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', ...fM, fontSize: '9px', letterSpacing: '0.14em', textTransform: 'uppercase', color: P.muted1 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: leg.color, flexShrink: 0 }} />
+                  {leg.label}
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '2px', ...fD, fontWeight: 600, fontSize: '18px', letterSpacing: '-0.01em', color: P.ink }}>
+                  {leg.pct}
+                  <span style={{ ...fM, fontSize: '9px', color: P.muted1, fontWeight: 500, alignSelf: 'flex-start', marginTop: '3px', letterSpacing: '0.06em' }}>
+                    {ordinal(leg.pct)}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── rule ──────────────────────────────────────────────────────── */}
+      <div style={{ height: 1, background: P.rule, margin: '0 32px' }} />
+
+      {/* ── score grid ────────────────────────────────────────────────── */}
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', padding: '20px 32px 24px' }}>
+        {[
+          {
+            label: 'Productivity',
+            pct: prodPct,
+            trend: prodPct - 50,
+            micro: hoursWorkedAvailable
+              ? `Per-hour output across all pillars. ${fmtInt(totalPillar)} total units across ${user.hoursWorked.toFixed(1)}h worked.`
+              : `Ranked on pillar totals — hours not available. ${fmtInt(totalPillar)} total units this period.`,
+          },
+          {
+            label: 'Quality',
+            pct: qualPct,
+            trend: qualPct - 50,
+            micro: `Defect rate ${fmtPct(user.metrics.defectRate)}, missing inst ${fmtPct(user.metrics.assemblyMissingInst)}.${user.qualityContext.eventCount > 0 ? ` ${user.qualityContext.eventCount} attributable event${user.qualityContext.eventCount !== 1 ? 's' : ''}.` : ''}`,
+          },
+          {
+            label: 'Versatility',
+            pct: versPct,
+            trend: versPct - 50,
+            micro: `Average pillar percentile. ${weakestPillar.label} at ${weakestPillar.pct}${ordinal(weakestPillar.pct)} is your swing dimension — closing that gap unlocks the next archetype.`,
+          },
+        ].map((s, i) => (
+          <div key={s.label} style={{
+            padding: i === 0 ? '0 20px 0 0' : '0 20px',
+            borderLeft: i === 0 ? 'none' : `1px dashed ${P.ruleStrong}`,
+          }}>
+            <div style={{ ...fM, fontSize: '10px', letterSpacing: '0.18em', textTransform: 'uppercase', color: P.muted1 }}>
+              {s.label}
+            </div>
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'baseline',
+              gap: '3px',
+              ...fD,
+              fontSize: 'clamp(40px, 4vw, 54px)',
+              fontWeight: 600,
+              letterSpacing: '-0.035em',
+              lineHeight: 0.95,
+              margin: '6px 0 5px',
+              color: P.ink,
+            }}>
+              {s.pct}
+              <span style={{ fontSize: '16px', fontWeight: 500, color: P.muted1, letterSpacing: '0.02em', alignSelf: 'flex-start', marginTop: '9px' }}>
+                {ordinal(s.pct)}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', ...fM, fontSize: '10px', letterSpacing: '0.06em', color: P.muted1 }}>
+              <span style={{ color: trendColor(s.trend) }}>{trendArrow(s.trend)} {fmtSigned(s.trend)}</span>
+              <span>vs median</span>
+            </div>
+            <p style={{ marginTop: '10px', fontSize: '12px', color: P.ink2, lineHeight: 1.35, maxWidth: '260px', margin: '10px 0 0' }}>
+              {s.micro}
+            </p>
+          </div>
+        ))}
+      </section>
+
+      {/* ── pillar breakdown ──────────────────────────────────────────── */}
+      <section style={{ padding: '4px 32px 22px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px' }}>
+          <h3 style={{ ...fD, fontWeight: 600, fontSize: '15px', letterSpacing: '-0.005em', color: P.ink, margin: 0 }}>
+            Pillar breakdown
+          </h3>
+          <div style={{ ...fM, fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: P.muted1 }}>
+            Bar shows percentile · marker shows cohort median
+          </div>
+        </div>
+        {pillarRows.map((row, i) => (
+          <div key={row.key} style={{
+            display: 'grid',
+            gridTemplateColumns: '160px 1fr 80px 96px 88px',
+            alignItems: 'center',
+            gap: '16px',
+            padding: '12px 0',
+            borderTop: i === 0 ? `1px solid ${P.ruleStrong}` : `1px dashed ${P.rule}`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ width: 10, height: 18, borderRadius: 3, background: row.color, flexShrink: 0 }} />
+              <div>
+                <div style={{ ...fD, fontSize: '16px', fontWeight: 600, lineHeight: 1, letterSpacing: '-0.005em' }}>
+                  {row.label}
+                </div>
+                <div style={{ ...fM, fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: P.muted1, marginTop: '3px' }}>
+                  {row.sub}
+                </div>
+              </div>
+            </div>
+            {/* percentile bar */}
+            <div style={{ position: 'relative', height: 14, background: P.paper2, borderRadius: 999, overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: `${row.pct}%`, borderRadius: 999, background: row.color }} />
+              <div style={{ position: 'absolute', top: -4, bottom: -4, left: '50%', width: 2, background: P.ink, opacity: 0.55 }} />
+            </div>
+            {/* percentile label */}
+            <div style={{ ...fD, fontSize: '20px', fontWeight: 600, letterSpacing: '-0.02em', display: 'inline-flex', alignItems: 'baseline', gap: '2px', justifyContent: 'flex-end' }}>
+              {row.pct}
+              <span style={{ ...fM, fontSize: '9px', color: P.muted1, fontWeight: 500, alignSelf: 'flex-start', marginTop: '4px', letterSpacing: '0.06em' }}>
+                {ordinal(row.pct)}
+              </span>
+            </div>
+            {/* total */}
+            <div style={{ ...fM, fontSize: '12px', letterSpacing: '0.02em', textAlign: 'right', color: P.ink2 }}>
+              {fmtInt(row.total)}
+              <span style={{ display: 'block', fontSize: '9px', color: P.muted1, textTransform: 'uppercase', letterSpacing: '0.14em', marginTop: '2px' }}>
+                {row.unit}
+              </span>
+            </div>
+            {/* trend */}
+            <div style={{ ...fM, fontSize: '11px', letterSpacing: '0.04em', textAlign: 'right' }}>
+              <span style={{ display: 'block', fontSize: '9px', color: P.muted1, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: '2px' }}>
+                vs median
+              </span>
+              <span style={{ color: trendColor(row.trend) }}>
+                {trendArrow(row.trend)} {fmtSigned(row.trend)}
+              </span>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      {/* ── work mix + context ────────────────────────────────────────── */}
+      <section style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '20px', padding: '0 32px 22px' }}>
+        {/* work mix */}
+        <div style={{ background: '#fff', border: `1px solid ${P.rule}`, borderRadius: '14px', padding: '16px 18px' }}>
+          <h4 style={{ ...fD, fontWeight: 600, fontSize: '13px', letterSpacing: '-0.005em', margin: '0 0 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            Work mix
+            <span style={{ ...fM, fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: P.muted1, fontWeight: 500 }}>
+              share of pillar activity
+            </span>
+          </h4>
+          <div style={{ display: 'flex', height: '22px', borderRadius: '6px', overflow: 'hidden', border: `1px solid ${P.rule}` }}>
+            {([
+              { pct: workMix.assembly,  color: P.assembly },
+              { pct: workMix.decon,     color: P.decon },
+              { pct: workMix.sterilize, color: P.sterilize },
+            ] as const).map((seg, i) => (
+              <div key={i} style={{
+                width: `${seg.pct}%`,
+                background: seg.color,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'rgba(255,255,255,0.95)',
+                ...fM,
+                fontSize: '10px',
+                letterSpacing: '0.1em',
+                fontWeight: 600,
+              }}>
+                {seg.pct > 10 ? `${seg.pct}%` : ''}
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: '10px', display: 'flex', gap: '16px', flexWrap: 'wrap', ...fM, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: P.muted1 }}>
+            {([
+              ['Assembly', P.assembly, workMix.assembly],
+              ['Decon',    P.decon,    workMix.decon],
+              ['Sterilize',P.sterilize,workMix.sterilize],
+            ] as const).map(([name, color, pct]) => (
+              <span key={name} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: color }} />
+                {name} {pct}%
+              </span>
+            ))}
+          </div>
+          <p style={{ marginTop: '12px', paddingTop: '10px', borderTop: `1px dashed ${P.rule}`, fontSize: '12px', color: P.ink2, lineHeight: 1.45, margin: '12px 0 0' }}>
+            You spent{' '}
+            <strong style={{ color: P.ink, fontWeight: 600 }}>{dominantMix.pct}%</strong> of pillar work in{' '}
+            <strong style={{ color: P.ink, fontWeight: 600 }}>{dominantMix.name}</strong> this period.{' '}
+            {weakestPillar.pct < 60
+              ? `Picking up more ${weakestPillar.label} work would move your Versatility score fastest.`
+              : 'A well-rounded mix across all three pillars.'}
+          </p>
+        </div>
+
+        {/* context tiles */}
+        <div style={{ background: '#fff', border: `1px solid ${P.rule}`, borderRadius: '14px', padding: '16px 18px' }}>
+          <h4 style={{ ...fD, fontWeight: 600, fontSize: '13px', letterSpacing: '-0.005em', margin: '0 0 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            Context
+            <span style={{ ...fM, fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: P.muted1, fontWeight: 500 }}>
+              timekeeping &amp; quality
+            </span>
+          </h4>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {[
+              {
+                k: hoursWorkedAvailable ? 'Worked / unit' : 'Hours worked',
+                v: hoursWorkedAvailable ? user.metrics.workedHoursPerUnit.toFixed(2) : '—',
+                unit: hoursWorkedAvailable ? 'hr' : '',
+                d: hoursWorkedAvailable
+                  ? (user.metrics.workedHoursPerUnit < medians.workedHoursPerUnit
+                      ? 'Efficient — below cohort median.'
+                      : 'Above cohort median hrs/unit.')
+                  : 'Hours not available.',
+              },
+              {
+                k: 'Defect rate',
+                v: fmtPct(user.metrics.defectRate, 2),
+                unit: '',
+                d: user.qualityContext.eventCount > 0
+                  ? `${user.qualityContext.eventCount} attributable event${user.qualityContext.eventCount !== 1 ? 's' : ''} this period.`
+                  : 'Zero attributable events.',
+              },
+              {
+                k: 'PTO / Unpaid',
+                v: user.timekeepingContext.ptoHours.toFixed(1),
+                unit: 'h',
+                d: [
+                  user.timekeepingContext.unpaidHours > 0 ? `${user.timekeepingContext.unpaidHours.toFixed(1)}h unpaid.` : '',
+                  user.timekeepingContext.overtimeHours > 0 ? `${user.timekeepingContext.overtimeHours.toFixed(1)}h overtime.` : 'No overtime.',
+                ].filter(Boolean).join(' '),
+              },
+              {
+                k: 'Coaching',
+                v: String(user.qualityContext.coachingCount),
+                unit: 'sess',
+                d: user.qualityContext.coachingCount === 0
+                  ? 'No coaching sessions.'
+                  : `${user.qualityContext.coachingCount} session${user.qualityContext.coachingCount !== 1 ? 's' : ''} this period.`,
+              },
+            ].map((tile) => (
+              <div key={tile.k} style={{ padding: '10px 11px', border: `1px solid ${P.rule}`, borderRadius: '10px', background: P.card }}>
+                <div style={{ ...fM, fontSize: '9px', letterSpacing: '0.16em', textTransform: 'uppercase', color: P.muted1 }}>
+                  {tile.k}
+                </div>
+                <div style={{ ...fD, fontSize: '21px', fontWeight: 600, letterSpacing: '-0.02em', lineHeight: 1.05, marginTop: '5px' }}>
+                  {tile.v}
+                  {tile.unit ? <small style={{ ...fM, fontSize: '10px', color: P.muted1, fontWeight: 500, marginLeft: '3px', letterSpacing: '0.04em' }}>{tile.unit}</small> : null}
+                </div>
+                <div style={{ marginTop: '3px', fontSize: '11px', color: P.ink2 }}>{tile.d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── badges ────────────────────────────────────────────────────── */}
+      {user.badges.length > 0 ? (
+        <section style={{ padding: '18px 32px 4px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px' }}>
+            <h3 style={{ ...fD, fontWeight: 600, fontSize: '15px', letterSpacing: '-0.005em', color: P.ink, margin: 0 }}>
+              Badges earned
+            </h3>
+            <div style={{ ...fM, fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: P.muted1 }}>
+              {user.badges.length} this period
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
+            {user.badges.map((badge) => {
+              const markStyle: React.CSSProperties =
+                badge.tier === 'gold'
+                  ? { background: 'linear-gradient(160deg, #ffc24a, #c98306)', color: '#2b1a00' }
+                  : badge.tier === 'silver'
+                    ? { background: 'linear-gradient(160deg, #d9d3c4, #8d8779)', color: '#1f1c16' }
+                    : { background: 'linear-gradient(160deg, #e8a774, #a45a23)', color: '#2b1500' }
+              return (
+                <div
+                  key={`${badge.category}-${badge.label}`}
+                  style={{ position: 'relative', padding: '13px 13px 13px 48px', border: `1px solid ${P.rule}`, borderRadius: '12px', background: P.card }}
+                >
+                  <div style={{
+                    position: 'absolute', top: 11, left: 11,
+                    width: 28, height: 28, borderRadius: 8,
+                    display: 'grid', placeItems: 'center',
+                    ...fD, fontWeight: 700, fontSize: '11px', letterSpacing: '0.02em',
+                    ...markStyle,
+                  }}>
+                    {monogramFor(badge.label)}
+                  </div>
+                  <div style={{ ...fD, fontWeight: 600, fontSize: '13px', letterSpacing: '-0.005em', lineHeight: 1.15 }}>
+                    {badge.label}
+                  </div>
+                  <div style={{ marginTop: '3px', ...fM, fontSize: '9px', letterSpacing: '0.14em', textTransform: 'uppercase', color: P.muted1 }}>
+                    {badge.tier} · {badge.category}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </section>
       ) : null}
 
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-ink">Work mix</h4>
-          <div className="text-[10px] uppercase tracking-[0.14em] text-muted">
-            % of total pillar activity
+      {/* ── coach note ────────────────────────────────────────────────── */}
+      {user.coachingSummary ? (
+        <section style={{
+          margin: '22px 32px 0',
+          padding: '24px 26px',
+          background: P.ink,
+          color: P.card,
+          borderRadius: '16px',
+          position: 'relative',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            position: 'absolute', inset: 0, pointerEvents: 'none',
+            background: `radial-gradient(420px 240px at -10% 110%, rgba(227,135,10,0.30), transparent 60%), radial-gradient(360px 200px at 110% -10%, rgba(43,88,255,0.28), transparent 60%)`,
+          }} aria-hidden="true" />
+          <div style={{ position: 'relative', ...fM, fontSize: '10px', letterSpacing: '0.22em', textTransform: 'uppercase', color: 'rgba(251,248,241,0.6)' }}>
+            Coach note · for {displayName.split(' ')[0]}
           </div>
-        </div>
-        <div className="flex h-3 overflow-hidden rounded-full border border-ink/10 bg-white/80">
-          <div
-            className="h-full bg-accent"
-            style={{ width: `${deconShare}%` }}
-            title={`Decon ${deconShare.toFixed(1)}%`}
-          />
-          <div
-            className="h-full bg-brand"
-            style={{ width: `${assemblyShare}%` }}
-            title={`Assembly ${assemblyShare.toFixed(1)}%`}
-          />
-          <div
-            className="h-full bg-success"
-            style={{ width: `${sterilizeShare}%` }}
-            title={`Sterilize ${sterilizeShare.toFixed(1)}%`}
-          />
-        </div>
-        <div className="flex flex-wrap gap-3 text-xs text-muted">
-          <span className="inline-flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-accent" />
-            Decon {deconShare.toFixed(0)}%
-          </span>
-          <span className="inline-flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-brand" />
-            Assembly {assemblyShare.toFixed(0)}%
-          </span>
-          <span className="inline-flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-success" />
-            Sterilize {sterilizeShare.toFixed(0)}%
-          </span>
-        </div>
-      </section>
-
-      <section className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-2xl border border-ink/10 bg-white/85 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">
-              User vs median
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-3 text-[10px] font-medium uppercase tracking-[0.12em] text-muted">
-              <span className="inline-flex items-center gap-2">
-                <span
-                  className="h-3 w-5 rounded-sm border border-ink/70"
-                  style={{ background: '#334155' }}
-                />
-                User
+          <p style={{
+            position: 'relative',
+            margin: '10px 0 0',
+            ...fD,
+            fontWeight: 500,
+            fontSize: 'clamp(16px, 2vw, 24px)',
+            lineHeight: 1.22,
+            letterSpacing: '-0.01em',
+          }}>
+            {user.coachingSummary}
+          </p>
+          <div style={{
+            position: 'relative',
+            marginTop: '14px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            ...fM,
+            fontSize: '10px',
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+            color: 'rgba(251,248,241,0.55)',
+          }}>
+            <span>— SPD Educator</span>
+            {user.opportunity ? (
+              <span>
+                <strong style={{ color: P.card, fontWeight: 600 }}>Next goal:</strong> {user.opportunity}
               </span>
-              <span className="inline-flex items-center gap-2">
-                <span
-                  className="h-3 w-5 rounded-sm border border-ink/70"
-                  style={{
-                    backgroundColor: '#f8fafc',
-                    backgroundImage:
-                      'repeating-linear-gradient(135deg, rgba(71, 85, 105, 0.9) 0 2px, transparent 2px 5px)',
-                  }}
-                />
-                Median
-              </span>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {/* ── foot strap ────────────────────────────────────────────────── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, 1fr)',
+        padding: '20px 32px 26px',
+        marginTop: '22px',
+        borderTop: `1px dashed ${P.ruleStrong}`,
+        ...fM,
+        fontSize: '11px',
+        letterSpacing: '0.04em',
+        color: P.ink2,
+      }}>
+        {[
+          { k: 'Units of service',  v: fmtInt(totalPillar),                                                                  unit: 'uos' },
+          { k: 'Worked hrs / unit', v: hoursWorkedAvailable ? user.metrics.workedHoursPerUnit.toFixed(2) : '—',              unit: hoursWorkedAvailable ? 'hr' : '' },
+          { k: 'Missing inst rate', v: fmtPct(user.metrics.assemblyMissingInst, 2),                                          unit: '' },
+          { k: 'Defect rate',       v: fmtPct(user.metrics.defectRate, 2),                                                    unit: '' },
+        ].map((ft) => (
+          <div key={ft.k}>
+            <div style={{ fontSize: '9px', letterSpacing: '0.18em', textTransform: 'uppercase', color: P.muted1, marginBottom: '5px' }}>
+              {ft.k}
+            </div>
+            <div style={{ ...fD, fontWeight: 600, fontSize: '17px', letterSpacing: '-0.01em', color: P.ink }}>
+              {ft.v}
+              {ft.unit ? (
+                <small style={{ ...fM, fontSize: '10px', fontWeight: 500, color: P.muted1, marginLeft: '3px', letterSpacing: '0.06em' }}>
+                  {ft.unit}
+                </small>
+              ) : null}
             </div>
           </div>
-          <div className="mt-3 h-32">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={barData} barSize={18} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                <defs>
-                  <pattern
-                    id={userPatternId}
-                    width="6"
-                    height="6"
-                    patternUnits="userSpaceOnUse"
-                  >
-                    <rect width="6" height="6" fill="#334155" />
-                  </pattern>
-                  <pattern
-                    id={medianPatternId}
-                    width="8"
-                    height="8"
-                    patternUnits="userSpaceOnUse"
-                    patternTransform="rotate(135)"
-                  >
-                    <rect width="8" height="8" fill="#f8fafc" />
-                    <line x1="0" y1="0" x2="0" y2="8" stroke="#475569" strokeWidth="3" />
-                  </pattern>
-                </defs>
-                <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 10 }} />
-                <Tooltip
-                  cursor={{ fill: 'rgba(15, 23, 42, 0.05)' }}
-                  formatter={(value, name) => {
-                    const numeric = typeof value === 'number' ? value : Number(value)
-                    const formatted = Number.isFinite(numeric) ? numeric.toFixed(0) : value
-                    return [formatted, name]
-                  }}
-                />
-                <Bar
-                  dataKey="Median"
-                  fill={`url(#${medianPatternId})`}
-                  stroke="#475569"
-                  strokeWidth={1}
-                  radius={[6, 6, 0, 0]}
-                />
-                <Bar
-                  dataKey="User"
-                  fill={`url(#${userPatternId})`}
-                  stroke="#334155"
-                  strokeWidth={1}
-                  radius={[6, 6, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-        <div className="rounded-2xl border border-ink/10 bg-white/85 p-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">
-            Pillar radar
-          </div>
-          <div className="mt-2 h-32">
-            <ResponsiveContainer width="100%" height="100%">
-              <RadarChart data={radarData} outerRadius={45}>
-                <PolarGrid stroke="#e2e8f0" />
-                <PolarAngleAxis dataKey="pillar" tick={{ fontSize: 9 }} />
-                <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fontSize: 8 }} />
-                <Radar dataKey="value" stroke="#2563eb" fill="#2563eb" fillOpacity={0.35} />
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </section>
-
-<footer className="rounded-2xl border border-ink/10 bg-white/85 p-4 text-sm text-muted">
-        {user.coachingSummary}
-      </footer>
+        ))}
+      </div>
     </article>
   )
 }

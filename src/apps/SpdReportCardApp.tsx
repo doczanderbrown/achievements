@@ -2100,7 +2100,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                     </span>
                   </label>
                   <label className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-ink">3. Quality <span className="text-muted font-normal">(optional)</span></span>
+                    <span className="text-sm font-medium text-ink">3. Quality</span>
                     <input
                       type="file"
                       accept=".xlsx"
@@ -2114,7 +2114,7 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
                     </span>
                   </label>
                   <label className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-ink">4. Timecards</span>
+                    <span className="text-sm font-medium text-ink">4. Timecards <span className="text-muted font-normal">(optional)</span></span>
                     <input
                       type="file"
                       accept=".xlsx"

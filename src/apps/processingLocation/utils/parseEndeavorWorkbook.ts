@@ -387,8 +387,6 @@ export const isEndeavorWorkbook = async (file: File): Promise<boolean> => {
   return false
 }
 
-const ITEMS_DETAILS_TARGET_COLS = new Set(['B', 'I'])
-
 export const parseEndeavorWorkbook = async (
   file: File,
   itemHomeMap: Map<string, string>,
