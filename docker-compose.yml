@@ -1,4 +1,33 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: myapp-postgres
+    environment:
+      POSTGRES_DB: achievements
+      POSTGRES_USER: achievements
+      POSTGRES_PASSWORD: achievements
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U achievements -d achievements"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  pdf-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: myapp-pdf-api
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgresql://achievements:achievements@postgres:5432/achievements
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   myapp:
     build:
       context: .
@@ -6,6 +35,11 @@ services:
       args:
         VITE_BASE_PATH: /tools/
     container_name: myapp
+    depends_on:
+      - pdf-api
     ports:
       - "3000:3000"
     restart: unless-stopped
+
+volumes:
+  postgres-data:
