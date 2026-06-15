@@ -153,6 +153,8 @@ export type RawRow = {
   'Activity Time (Mins)': number
   'Primary Facility'?: string
   Role?: string
+  'Audit Check Count'?: number
+  'Audit Fail Count'?: number
   'Coaching Count'?: number
   'PTO Hours'?: number
   'Unpaid Hours'?: number
@@ -200,6 +202,8 @@ export type UserRecord = {
   productivityRanked: boolean
   qualityContext: {
     eventCount: number
+    auditChecks: number
+    auditFails: number
     coachingCount: number
   }
   timekeepingContext: {
@@ -530,6 +534,8 @@ export const coerceRow = (row: Record<string, unknown>): RawRow => {
     'Activity Time (Mins)': toNumber(row['Activity Time (Mins)']),
     'Primary Facility': String(row['Primary Facility'] ?? '').trim(),
     Role: String(row.Role ?? '').trim(),
+    'Audit Check Count': toNumber(row['Audit Check Count']),
+    'Audit Fail Count': toNumber(row['Audit Fail Count']),
     'Coaching Count': toNumber(row['Coaching Count']),
     'PTO Hours': toNumber(row['PTO Hours']),
     'Unpaid Hours': toNumber(row['Unpaid Hours']),
@@ -620,6 +626,8 @@ export const buildReport = (
       hoursWorked,
       qualityContext: {
         eventCount: toNumber(row['NumofEvents']),
+        auditChecks: toNumber(row['Audit Check Count']),
+        auditFails: toNumber(row['Audit Fail Count']),
         coachingCount: toNumber(row['Coaching Count']),
       },
       timekeepingContext: {
@@ -727,7 +735,7 @@ export const buildReport = (
             3
           : 0
 
-    const quality = percentiles.defectRate
+    const quality = percentiles.defectRate * 0.7 + percentiles.assemblyMissingInst * 0.3
 
     // Average of all three pillar percentiles so users who dominate multiple pillars
     // score higher than those who merely squeak above median.

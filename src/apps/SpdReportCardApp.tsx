@@ -336,19 +336,22 @@ type DrillSection = {
   groups?: DrillListGroup[]
 }
 
-const PRODUCTION_ROLES = new Set([
+const PRODUCTIVE_ROLES = new Set([
   'Sterile Supply Tech',
   'Staff',
   'Certified Sterile Supply Tech',
 ])
+const UNSPECIFIED_ROLE = 'Unspecified'
 
 const sortLabels = (values: string[]) => [...values].sort((left, right) => left.localeCompare(right))
 
 const getRawRowName = (row: RawRow) => String(row['User Name'] ?? '').trim()
+const getRoleLabel = (row: RawRow) => String(row.Role ?? '').trim() || UNSPECIFIED_ROLE
+const isProductiveRole = (role: string) => PRODUCTIVE_ROLES.has(role)
 
 const formatRowWithRole = (row: RawRow) => {
   const name = getRawRowName(row)
-  const role = String(row.Role ?? '').trim()
+  const role = getRoleLabel(row)
   return role ? `${name} (${role})` : name
 }
 
@@ -356,7 +359,7 @@ const formatRoleCountSummary = (rows: RawRow[]) => {
   const counts = new Map<string, number>()
 
   for (const row of rows) {
-    const role = String(row.Role ?? '').trim() || 'Unspecified'
+    const role = getRoleLabel(row)
     counts.set(role, (counts.get(role) ?? 0) + 1)
   }
 
@@ -368,6 +371,7 @@ const formatRoleCountSummary = (rows: RawRow[]) => {
     .map(([role, count]) => `${role}: ${count}`)
     .join(', ')
 }
+
 
 const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
   const [report, setReport] = useState<ProcessedReport | null>(null)
@@ -657,8 +661,8 @@ const SpdReportCardApp = ({ onBack }: SpdReportCardAppProps) => {
     if (!roleDataAvailable || cohortMode === 'all') return loadedSource.rows
 
     const filtered = loadedSource.rows.filter((row) => {
-      const role = String(row.Role ?? '').trim()
-      return !role || PRODUCTION_ROLES.has(role)
+      const role = getRoleLabel(row)
+      return role === UNSPECIFIED_ROLE || isProductiveRole(role)
     })
 
     return filtered.length > 0 ? filtered : loadedSource.rows
