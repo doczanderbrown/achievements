@@ -1,0 +1,38 @@
+name: Deploy to homelab
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    concurrency:
+      group: deploy
+      cancel-in-progress: false   # let an in-progress deploy finish
+
+    steps:
+      - name: Pull latest code
+        run: |
+          cd ~/apps/myapp-autodeploy-src
+          git fetch origin
+          git reset --hard origin/main
+
+      - name: Build and restart containers
+        run: |
+          cd ~/apps/myapp-autodeploy-src
+          docker compose up -d --build
+
+      - name: Reconnect cloudflared to app network
+        run: |
+          # Ensure cloudflared is on the same network as the rebuilt app container.
+          # docker network connect is idempotent — already-connected is not an error.
+          docker network connect myapp-autodeploy-src_default myapp-cloudflared 2>/dev/null || true
+          docker restart myapp-cloudflared
+
+      - name: Smoke test
+        run: |
+          sleep 5
+          curl -sf http://localhost:3000/tools/ -o /dev/null \
+            && echo "✓ App is up" \
+            || (echo "✗ Smoke test failed" && exit 1)
